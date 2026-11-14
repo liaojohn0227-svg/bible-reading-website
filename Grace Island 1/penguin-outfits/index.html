@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>企鵝聖經造型</title>
+<style>
+:root{color-scheme:light;--ink:#233c46;--muted:#526b74;--deep:#245b59;--line:#d7e4df;--serif:"Noto Serif TC","PMingLiU","Songti TC",serif;--body:"Noto Sans TC","Microsoft JhengHei","PingFang TC",system-ui,sans-serif}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:#d3e6e6;color:var(--ink);font-family:var(--body);overflow:hidden}
+button,select{font:inherit;color:inherit;cursor:pointer}
+#stage{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+.panel{position:fixed;background:#f8fbf5f0;border:1px solid #ffffffdb;box-shadow:0 10px 35px #12364024}
+.card{left:max(18px,env(safe-area-inset-left));top:calc(18px + env(safe-area-inset-top));width:min(300px,calc(100vw - 32px));padding:16px 18px;border-radius:22px}
+.eyebrow{color:var(--deep);font-size:12px;font-weight:750;letter-spacing:.12em;margin:0 0 6px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.eyebrow select{border:1px solid var(--line);border-radius:9px;background:#fff;padding:3px 6px;font-size:12px;font-weight:700}
+.card h1{font:700 23px/1.3 var(--serif);margin:0 0 6px}
+.verse{margin:0 0 6px;padding:8px 11px;border-left:3px solid #75a396;background:#eaf1e9;font:600 13px/1.6 var(--serif)}
+.verse small{display:block;margin-top:2px;color:var(--muted);font:600 11px var(--body)}
+.card p.about{margin:0;color:var(--muted);font-size:12px;line-height:1.6}
+.nav{display:flex;flex-wrap:wrap;justify-content:center;gap:4px;padding:6px;bottom:calc(18px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);border-radius:20px;width:max-content;max-width:calc(100vw - 24px)}
+.nav button{border:0;border-radius:13px;background:transparent;min-height:40px;padding:7px 12px;font-size:13px;font-weight:700;position:relative}
+.nav button:hover{background:#e3eee8}
+.nav button[aria-pressed=true]{background:var(--deep);color:#fff}
+.nav button.new::after{content:'新';position:absolute;top:-5px;right:-3px;background:#d8b368;color:#fff;font-size:10px;border-radius:8px;padding:0 5px;line-height:16px}
+.nav .sep{width:1px;background:var(--line);margin:6px 2px}
+.tools{right:max(18px,env(safe-area-inset-right));top:calc(18px + env(safe-area-inset-top));padding:6px;border-radius:18px;display:flex;flex-direction:column;gap:4px}
+.tools button{border:0;border-radius:12px;background:transparent;min-height:38px;padding:6px 12px;font-size:13px;font-weight:700;text-align:left}
+.tools button:hover{background:#e3eee8}
+.tools button[aria-pressed=true]{background:#e7f0eb;color:#234c4b}
+@media(max-width:700px){.card{padding:11px 14px}.card h1{font-size:19px}.nav button{padding:5px 8px;font-size:12px;min-height:34px}.tools{top:auto;bottom:calc(150px + env(safe-area-inset-bottom))}}
+</style>
+</head>
+<body>
+<canvas id="stage" tabindex="0" aria-label="企鵝造型 3D 預覽，可拖曳旋轉、滾輪縮放"></canvas>
+<div class="panel card">
+  <p class="eyebrow"><span>GRACE ISLAND · 角色造型</span><select id="species" aria-label="企鵝種類">
+    <optgroup label="企鵝"><option value="adelie">阿德利企鵝</option><option value="emperor">皇帝企鵝</option><option value="rockhopper">跳岩企鵝</option><option value="chick">企鵝寶寶</option><option value="magellanic">麥哲倫企鵝（新）</option></optgroup><optgroup label="北極熊"><option value="bear-new">北極熊（新）</option><option value="bear-old">北極熊（原版）</option><option value="bear-both">北極熊 新舊並排</option></optgroup><optgroup label="海裡"><option value="ray">小魟寶寶（新）</option></optgroup></select></p>
+  <h1 id="name"></h1>
+  <p class="verse" id="verse" hidden></p>
+  <p class="about" id="about"></p>
+</div>
+<div class="panel tools" role="group" aria-label="預覽設定">
+  <button id="t-walk" aria-pressed="false">走動</button>
+  <button id="t-lineup" aria-pressed="false">五種並排</button>
+  <button id="t-spin" aria-pressed="true">自動旋轉</button>
+  <button id="t-pray" hidden>現在禱告</button>
+  <button id="t-sim" hidden aria-pressed="false">島上模擬</button>
+  <button id="t-under" hidden aria-pressed="false">從下面看</button>
+  <button id="t-reset">重設視角</button>
+</div>
+<nav class="panel nav" id="outfits" aria-label="造型"></nav>
+
+<script src="lib/three.r128.min.js"></script>
+<script src="lib/OrbitControls.r128.js"></script>
+<script src="js/base.js"></script>
+<script src="js/penguin.js"></script>
+<script src="js/magellanic.js"></script>
+<script src="js/outfits-core.js"></script>
+<script src="outfits/prayer.js"></script>
+<script src="outfits/priest.js"></script>
+<script src="outfits/shepherd.js"></script>
+<script src="outfits/evangelist.js"></script>
+<script>function splash(){}  /* the island draws water splashes here; not needed on this stage */</script>
+<script src="js/bear-island.js"></script>
+<script src="js/bear.js"></script>
+<script src="js/ray-baby.js"></script>
+<script src="js/island-sim.js"></script>
+<script>
+/* ---------- stage: same sky, fog and soft lights as the island ---------- */
+const canvas=document.getElementById('stage');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.outputEncoding=THREE.sRGBEncoding;
+const scene=new THREE.Scene();scene.background=new THREE.Color('#d3e6e6');scene.fog=new THREE.Fog('#d3e6e6',18,60);
+const camera=new THREE.PerspectiveCamera(36,1,.05,200);
+const HOME=[new THREE.Vector3(3.2,2.2,4.6),new THREE.Vector3(0,.85,0)];
+camera.position.copy(HOME[0]);
+const controls=new THREE.OrbitControls(camera,canvas);controls.target.copy(HOME[1]);
+controls.enableDamping=true;controls.dampingFactor=.12;controls.minDistance=1.6;controls.maxDistance=16;controls.maxPolarAngle=Math.PI*.52;
+controls.autoRotate=true;controls.autoRotateSpeed=.9;
+scene.add(new THREE.HemisphereLight('#ffffff','#9fd0d8',0.95));
+const sun=new THREE.DirectionalLight('#fffaf2',0.6);sun.position.set(6,10,7);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);sun.shadow.radius=4;
+Object.assign(sun.shadow.camera,{left:-5,right:5,top:5,bottom:-5,near:1,far:30});sun.shadow.bias=-.0006;scene.add(sun);
+const ground=new THREE.Mesh(new THREE.CylinderGeometry(4.2,4.4,.5,48),M(LIN('#e3f1f0'),{flatShading:false}));ground.position.y=-.25;ground.receiveShadow=true;scene.add(ground);
+const sea=new THREE.Mesh(new THREE.CircleGeometry(60,48),M(LIN('#7fb3bd'),{flatShading:false}));sea.rotation.x=-Math.PI/2;sea.position.y=-.35;scene.add(sea);
+
+/* ---------- penguins ---------- */
+const $=id=>document.getElementById(id);
+let simOn=false;
+let current={species:'adelie',outfit:'prayer'},actors=[],walking=false,lineup=false,forcePray=0;
+function disposeTree(o){o.traverse(x=>{if(x.geometry&&x.geometry!==FOOT&&x.geometry!==BLOB_GEO)x.geometry.dispose()})}
+let bears=[];
+const isBear=()=>current.species.startsWith('bear')||current.species==='ray';
+let ray=null;
+function spawn(){
+  actors.forEach(a=>{scene.remove(a.p.g);disposeTree(a.p.g);if(a.comp){scene.remove(a.comp.g);disposeTree(a.comp.g)}});actors=[];
+  bears.forEach(b=>{scene.remove(b.holder);disposeTree(b.holder)});bears=[];
+  if(ray){scene.remove(ray.g);disposeTree(ray.g);ray=null}
+  $('t-under').hidden=current.species!=='ray';
+  if(current.species!=='ray'){controls.maxPolarAngle=Math.PI*.52;$('t-under').setAttribute('aria-pressed',false)}
+  penguins.forEach(q=>{scene.remove(q.g);disposeTree(q.g)});penguins.length=0;
+  document.querySelector('.nav').hidden=isBear();$('t-lineup').hidden=$('t-walk').hidden=isBear();
+  if(isBear())return spawnBears();
+  const kinds=lineup?['adelie','emperor','rockhopper','chick','magellanic']:[current.species];
+  kinds.forEach((type,i)=>{
+    const p=buildPenguin(type);dressPenguin(p,current.outfit);
+    p.g.traverse(o=>{if(o.isMesh)o.castShadow=true});
+    const x=lineup?(i-2)*1.45:0;p.g.position.set(x,0,0);scene.add(p.g);
+    const a={p,home:x,angle:i*1.4,pray:0,nextPray:rnd(3,6),fl:[.12,.12],tx:[0,0],blinkT:rnd(1,4)};
+    // a companion (the shepherd's lamb) starts a step behind and follows from then on
+    const extra=EXTRA_OUTFITS[current.outfit];
+    if(extra?.companion){a.comp=extra.companion();a.comp.g.position.set(x-.2,0,-1);a.comp.g.traverse(o=>{if(o.isMesh)o.castShadow=true});scene.add(a.comp.g)}
+    actors.push(a);
+  });
+  const extra=EXTRA_OUTFITS[current.outfit];
+  $('name').textContent=PENGUIN_OUTFITS[current.outfit];
+  $('verse').hidden=!extra;if(extra)$('verse').innerHTML='';
+  if(extra){$('verse').append(extra.verse);const s=document.createElement('small');s.textContent=extra.ref;$('verse').append(s)}
+  $('about').textContent=extra?extra.about:'島上原有的造型，放在這裡方便和新造型比較。';
+  $('t-pray').hidden=!(extra&&extra.pose&&extra.pose.pray);
+  $('t-sim').hidden=!(extra&&extra.behavior);$('t-sim').setAttribute('aria-pressed',simOn);
+  ground.position.y=simOn&&extra?.behavior?-.25+SIM_LAND:-.25;     // island land sits at 0.21
+  if(simOn&&extra?.behavior){
+    // island simulation: the outfit penguin plus three ordinary ones, all driven by the island's own penguin code
+    actors.forEach(a=>{scene.remove(a.p.g);disposeTree(a.p.g)});actors=[];
+    const spots=[[0,0],[2.2,1.2],[-2.3,.8],[.4,-2.4]];
+    [[current.species,current.outfit],['adelie',''],['emperor',''],['magellanic','']].forEach(([type,outfit],i)=>{
+      const q=addPenguin(type,new THREE.Vector3(spots[i][0],0,spots[i][1]));if(outfit)dressPenguin(q,outfit);
+      q.g.traverse(o=>{if(o.isMesh)o.castShadow=true})});
+    if(penguins[0])penguins[0].nextPreach=worldTime+2;           // start the first conversation soon
+  }
+  document.querySelectorAll('#outfits button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.id===current.outfit));
+}
+/* bears: the island's bearBrain walks, sniffs, sits, shakes and stands on its own; each bear gets a stand-in floe */
+function spawnRay(){
+  ray=makeRayBaby(1.1);ray.g.traverse(o=>{if(o.isMesh)o.castShadow=true});scene.add(ray.g);ray.a=0;
+  $('name').textContent='小魟寶寶';$('verse').hidden=true;$('t-pray').hidden=true;
+  $('about').textContent='取代原本的冬鰩：圓胖的身體、島上同色系的柔和灰藍、淡淡的小白點、小小的黑色圓點眼睛、白肚子；肚子上有兩個小鼻孔、一抹微笑和兩排鰓裂（按「從下面看」）。輕輕拍著尖尖的翅膀繞圈游，後面拖著細長尾巴。';
+}
+function spawnBears(){
+  if(current.species==='ray')return spawnRay();
+  const kinds=current.species==='bear-both'?[['new',-3.8],['old',3.8]]:[[current.species==='bear-new'?'new':'old',0]];
+  kinds.forEach(([kind,x],i)=>{
+    const holder=new THREE.Group();holder.position.set(x,-.4,0);scene.add(holder);   // bearBrain stands the bear at y .4 (the floe top)
+    const b=kind==='new'?makeBear():makeBearOriginal();b.g.traverse(o=>{if(o.isMesh)o.castShadow=true});holder.add(b.g);
+    const label=kind==='new'?'新':'原版';
+    bears.push({holder,b,brain:bearBrain(holder,b,i*2.1,i),label});
+  });
+  $('name').textContent=current.species==='bear-both'?'北極熊：新（左）與原版（右）':current.species==='bear-new'?'北極熊（新）':'北極熊（原版）';
+  $('verse').hidden=true;$('t-pray').hidden=true;
+  $('about').textContent=current.species==='bear-old'?'島上原本的北極熊：由一顆顆球和圓柱拼成，眼睛是立體黑珠。':
+    '身體、脖子到頭連成一個圓潤的形狀，四肢自然接進身體，腳掌有深色肉墊；眼睛改成和企鵝一樣貼在表面的黑色橢圓。動作沿用島上的北極熊：走動、聞一聞、坐下、抖毛、站著張望。';
+}
+/* outfit buttons: the island's originals, then the new Bible outfits */
+const nav=$('outfits');
+for(const [id,label] of Object.entries(PENGUIN_OUTFITS)){
+  if(id&&EXTRA_OUTFITS[id])continue;
+  const b=document.createElement('button');b.textContent=label;b.dataset.id=id;b.onclick=()=>{current.outfit=id;spawn()};nav.append(b);
+}
+nav.append(Object.assign(document.createElement('span'),{className:'sep'}));
+for(const id of Object.keys(EXTRA_OUTFITS)){
+  const b=document.createElement('button');b.textContent=EXTRA_OUTFITS[id].name;b.dataset.id=id;b.className='new';b.onclick=()=>{current.outfit=id;spawn()};nav.append(b);
+}
+$('species').onchange=e=>{current.species=e.target.value;
+  if(current.species==='ray'){camera.position.set(2.6,2.4,3.6);controls.target.set(0,.9,0)}
+  else if(isBear()){const both=current.species==='bear-both';camera.position.set(both?2:5.5,both?6:3.6,both?14:7.5);controls.target.set(0,1,0)}else{camera.position.copy(HOME[0]);controls.target.copy(HOME[1])}spawn()};
+$('t-walk').onclick=e=>{walking=!walking;e.currentTarget.setAttribute('aria-pressed',walking)};
+$('t-lineup').onclick=e=>{lineup=!lineup;e.currentTarget.setAttribute('aria-pressed',lineup);spawn()};
+$('t-spin').onclick=e=>{controls.autoRotate=!controls.autoRotate;e.currentTarget.setAttribute('aria-pressed',controls.autoRotate)};
+$('t-pray').onclick=()=>actors.forEach(a=>{a.pray=EXTRA_OUTFITS.prayer.pose.pray.length;a.nextPray=rnd(8,15)});
+$('t-sim').onclick=()=>{simOn=!simOn;spawn();if(simOn){camera.position.set(4.5,4.2,7.5);controls.target.set(0,.6,0)}};
+$('t-under').onclick=e=>{const on=e.currentTarget.getAttribute('aria-pressed')!=='true';e.currentTarget.setAttribute('aria-pressed',on);
+  // from below: the ray swims higher and the camera sits just above the snow, looking up at its belly
+  if(ray)ray.lift=on?1.6:0;controls.maxPolarAngle=on?Math.PI*.95:Math.PI*.52;
+  camera.position.set(on?.6:2.6,on?.35:2.4,on?2.2:3.6);controls.target.set(0,on?2.5:.9,0)};
+$('t-reset').onclick=()=>{camera.position.copy(HOME[0]);controls.target.copy(HOME[1])};
+spawn();
+
+/* ---------- motion: a small version of the island's penguin loop ---------- */
+const clock=new THREE.Clock();
+function tick(){
+  const dt=Math.min(clock.getDelta(),.05),t=clock.elapsedTime;
+  const prayDef=EXTRA_OUTFITS[current.outfit]?.pose?.pray;
+  actors.forEach((a,idx)=>{
+    const p=a.p,g=p.g;
+    // the praying outfit stops every so often to pray
+    if(prayDef){a.nextPray-=dt;if(a.pray<=0&&a.nextPray<=0){a.pray=prayDef.length;a.nextPray=rnd(...prayDef.every)}}
+    if(!prayDef)a.pray=0;else if(a.pray>0)a.pray-=dt;
+    const praying=a.pray>0,prayK=praying?smooth(0,.6,prayDef.length-a.pray)*smooth(0,.6,a.pray):0;
+    const moving=walking&&!praying,ph=t*8+idx;
+    if(moving){a.angle+=dt*.45;const R=lineup?.35:1.1;g.position.x=a.home+Math.sin(a.angle)*R;g.position.z=Math.cos(a.angle)*R;
+      g.rotation.y=Math.atan2(Math.cos(a.angle),-Math.sin(a.angle))}
+    g.position.y=moving?Math.abs(Math.sin(ph))*.05*g.scale.y:0;
+    const rz=moving?Math.sin(ph)*.09:Math.sin(t*1.1+idx)*.02;
+    const ry=moving?0:Math.sin(t*.6+idx)*.45*(1-prayK);
+    // kneeling: the body sinks onto the cushion and leans into the bow, the feet tuck back behind it
+    const kn=prayDef?.kneel,kk=kn?prayK:0;
+    p.inner.rotation.set((prayDef?prayDef.bow:0)*prayK,ry,rz*(1-prayK));
+    p.inner.position.set(0,kn?(-kn.drop+.17)*kk:0,kn?-kn.back*kk:0);
+    p.feet.forEach((f,i)=>{const walkZ=moving?(i?-1:1)*Math.sin(ph)*.1:0;f.position.z=.22+walkZ+(kn?(kn.feetZ-.22)*kk:0);f.rotation.x=kn?kn.feetTilt*kk:0;f.position.y=kn?.06*kk:0});
+    const cushion=p.outfitParts?.cushion;if(cushion){cushion.visible=kk>.02;cushion.scale.setScalar(.6+.4*kk)}
+    p.blob.visible=!(cushion&&kk>.02);
+    for(let i=0;i<2;i++){
+      let tg=.12+Math.sin(t*1.7+i)*.03,tx=0;
+      if(moving){tg=.42+Math.sin(ph+i*Math.PI)*.08;tx=-.1}
+      let ty=0;
+      const hold=EXTRA_OUTFITS[current.outfit]?.pose?.hold;
+      if(current.outfit==='gardener'){tg=-.16;tx=-.65}
+      if(hold){tg=hold.z;tx=hold.x}
+      if(praying){const f=prayDef.fold;tg=f.z;tx=f.x;ty=(i?-1:1)*f.y}   // flippers folded together in front of the chest
+      a.fl[i]+=(tg-a.fl[i])*Math.min(1,dt*8);a.tx[i]+=(tx-a.tx[i])*Math.min(1,dt*6);
+      a.ty=a.ty||[0,0];a.ty[i]+=(ty-a.ty[i])*Math.min(1,dt*6);
+      p.flips[i].rotation.order='YXZ';p.flips[i].rotation.z=(i?1:-1)*a.fl[i];p.flips[i].rotation.x=a.tx[i];p.flips[i].rotation.y=a.ty[i];
+    }
+    a.blinkT-=dt;const bl=a.blinkT<0?(a.blinkT<-.13?(a.blinkT=rnd(2,5),1):.12):1;
+    p.eyes.forEach(e=>e.scale.y=1.9*(prayK>.5?.1:bl));
+  });
+  // the lamb trots to a spot a step behind its shepherd, and stands (or grazes) when the shepherd stops
+  actors.forEach(a=>{if(!a.comp)return;const g=a.p.g,c=a.comp.g;
+    const back=new THREE.Vector3(Math.sin(g.rotation.y),0,Math.cos(g.rotation.y)).multiplyScalar(-1.05);
+    const target=g.position.clone().add(back);target.y=0;const d=target.sub(c.position);d.y=0;const L=d.length();
+    const moving=L>.12;if(moving){const sp=Math.min(1.5,L*2.4)*dt;c.position.addScaledVector(d.normalize(),Math.min(sp,L));
+      let want=Math.atan2(d.x,d.z),diff=Math.atan2(Math.sin(want-c.rotation.y),Math.cos(want-c.rotation.y));c.rotation.y+=diff*Math.min(1,dt*6)}
+    else{let want=Math.atan2(g.position.x-c.position.x,g.position.z-c.position.z),diff=Math.atan2(Math.sin(want-c.rotation.y),Math.cos(want-c.rotation.y));c.rotation.y+=diff*Math.min(1,dt*2)}
+    a.comp.animate(t,dt,moving)});
+  bears.forEach(b=>b.brain(t,dt));
+  if(ray){ray.a+=dt*.35;const R=1.3;ray.g.position.set(Math.sin(ray.a)*R,.95+(ray.lift||0)+Math.sin(t*.8)*.08,Math.cos(ray.a)*R);
+    ray.g.rotation.y=Math.atan2(Math.cos(ray.a),-Math.sin(ray.a));ray.inner.rotation.z=-.18;ray.animate(t*2.6)}
+  worldTime=t;if(penguins.length)islandPenguinStep(t,dt);
+  updateEmotes(dt);
+  controls.update();renderer.render(scene,camera);requestAnimationFrame(tick);
+}
+function resize(){renderer.setSize(innerWidth,innerHeight,false);camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix()}
+addEventListener('resize',resize);resize();tick();
+window.__outfits={ray:()=>ray,actors:()=>actors,bears:()=>bears,sim:()=>penguins,setOutfit:id=>{current.outfit=id;spawn()},camera,controls};
+</script>
+</body>
+</html>
