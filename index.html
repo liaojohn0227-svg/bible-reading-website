@@ -95,35 +95,44 @@ select{font:inherit;width:100%;padding:10px;border:1px solid #b8ccc7;border-radi
 .unlock-detail progress{width:100%;accent-color:#397465}
 .unlock-detail .actions{margin-top:14px}
 
-/* Keep touch controls in separate rows and dialogs inside the visible viewport. */
+.mobile-controls{display:none}
+#mobile-sidebar{position:fixed;inset:0 auto 0 0;margin:0;width:min(344px,calc(100vw - 44px));height:100%;height:100dvh;max-height:none;border-radius:0 22px 22px 0;overscroll-behavior:contain}
+.sidebar-body{padding:calc(12px + env(safe-area-inset-top)) 15px calc(18px + env(safe-area-inset-bottom)) max(15px,env(safe-area-inset-left))}
+.sidebar-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}
+.sidebar-head h2{margin:0;font-size:18px}
+.sidebar-group{margin-top:16px}
+.sidebar-group h3{margin:0 0 7px;font-size:13px;color:var(--deep)}
 @media (max-width:600px){
-  :root{--mobile-edge:12px;--nav-height:102px}
-  .nav{left:max(var(--mobile-edge),env(safe-area-inset-left));right:max(var(--mobile-edge),env(safe-area-inset-right));width:auto;max-width:none;transform:none;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px;padding:5px}
-  .nav button{min-height:44px;padding:4px 2px;white-space:normal}
-  .view,.focus{bottom:calc(18px + var(--nav-height) + env(safe-area-inset-bottom))}
-  .focus button,.view button{min-height:44px;padding-inline:7px;white-space:nowrap}
-  .hint{bottom:calc(76px + var(--nav-height) + env(safe-area-inset-bottom));max-width:calc(100vw - 24px);white-space:normal;text-align:center}
-  .focus:has(#stop-follow:not([hidden])){bottom:calc(76px + var(--nav-height) + env(safe-area-inset-bottom))}
-  body:has(#stop-follow:not([hidden])) .hint{bottom:calc(133px + var(--nav-height) + env(safe-area-inset-bottom))}
-  .penguin-roster button{min-height:28px}
   .sheet input,.sheet textarea,.sheet select{font-size:16px;min-height:44px;min-width:0}
-  dialog{width:calc(100% - 24px);max-height:calc(var(--visible-height, 100dvh) - 24px);overscroll-behavior:contain}
-  dialog[open]{position:fixed;inset:calc(var(--visible-top, 0px) + 12px) 0 auto;margin:0 auto}
+  #panel{width:calc(100% - 24px);max-height:calc(var(--visible-height, 100dvh) - 24px);overscroll-behavior:contain}
+  #panel[open]{position:fixed;inset:calc(var(--visible-top, 0px) + 12px) 0 auto;margin:0 auto}
   .sheet{padding-bottom:max(18px,env(safe-area-inset-bottom))}
 }
-@media (max-height:490px) and (orientation:landscape){
-  .nav{bottom:calc(8px + env(safe-area-inset-bottom))}
-  .view,.focus,.focus:has(#stop-follow:not([hidden])){bottom:calc(68px + env(safe-area-inset-bottom))}
-  .hint,body:has(#stop-follow:not([hidden])) .hint{display:none}
-  .card{max-height:36dvh;overflow:auto}
-}
-@media (max-height:490px) and (orientation:landscape) and (max-width:600px){
-  .view,.focus,.focus:has(#stop-follow:not([hidden])){bottom:calc(120px + env(safe-area-inset-bottom))}
+@media (max-width:600px), (pointer:coarse) and (max-width:950px){
+  .mobile-controls{display:flex;position:fixed;align-items:center;gap:8px;z-index:2}
+  .mobile-bottom{left:50%;transform:translateX(-50%);bottom:calc(12px + env(safe-area-inset-bottom))}
+  #mobile-menu{min-height:44px;padding-inline:20px;background:#f8fbf5;box-shadow:0 3px 18px #12364030}
+  .sidebar-body #camera-mode{display:none}
+  .brand{top:calc(16px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);pointer-events:none}
+  .brand h1{font-size:17px;white-space:nowrap}
+  .brand-icon,.brand p,.hint{display:none}
+  .notice,#pier-prayer-notice{top:calc(61px + env(safe-area-inset-top));bottom:auto;pointer-events:none;text-align:center}
+  #notice:not([hidden]) + #pier-prayer-notice{top:calc(110px + env(safe-area-inset-top))}
+  .sidebar-body .card,.sidebar-body .nav,.sidebar-body .view,.sidebar-body .focus,.sidebar-body #music-toggle{position:static;transform:none;width:auto;max-width:none;max-height:none;box-shadow:none}
+  .sidebar-body .card{display:block;padding:11px 12px;background:#edf4ef;border-radius:14px}
+  .sidebar-body .card h2{text-align:left;font-size:16px;margin:3px 0 6px}
+  .sidebar-body .penguin-roster button{min-height:32px}
+  .sidebar-body .nav,.sidebar-body .view,.sidebar-body .focus{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));padding:0;gap:6px;background:none;border:0}
+  .sidebar-body .view{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .sidebar-body button{min-height:44px}
+  .sidebar-body .nav button:not(.primary){background:#edf4ef}
+  .sidebar-body #music-toggle{margin-top:8px}
+  .sidebar-gesture{margin:8px 0 0;color:var(--muted);font-size:12px;line-height:1.5}
 }
 </style>
 </head>
 <body>
-<canvas id="stage" tabindex="0" aria-label="恩典之島 3D 場景。左鍵拖曳平移，右鍵拖曳旋轉，可旋轉到水下。觸控上下滑可下潛或上浮。"></canvas>
+<canvas id="stage" tabindex="0" aria-label="恩典之島 3D 場景"></canvas>
 <header class="brand"><span class="brand-icon" aria-hidden="true">✦</span><div><h1>恩典之島</h1><p>Grace Island</p></div></header>
 <aside class="card" aria-label="島嶼進度">
   <p class="eyebrow" id="region-name">初雪灣</p>
@@ -153,6 +162,17 @@ select{font:inherit;width:100%;padding:10px;border:1px solid #b8ccc7;border-radi
   <button id="backup">備份</button>
   <button id="shared-islands">群島</button>
 </nav>
+<div class="mobile-controls mobile-bottom">
+  <button class="soft" id="mobile-menu" type="button" aria-expanded="false" aria-controls="mobile-sidebar">☰ 選單</button>
+</div>
+<dialog id="mobile-sidebar" aria-labelledby="sidebar-title">
+  <div class="sidebar-body">
+    <header class="sidebar-head"><h2 id="sidebar-title">島嶼選單</h2><button class="close" id="close-sidebar" type="button" aria-label="收起側欄">×</button></header>
+    <div id="sidebar-progress"></div>
+    <section class="sidebar-group" id="sidebar-journal"><h3>日記與收藏</h3></section>
+    <section class="sidebar-group" id="sidebar-view"><h3>場景與鏡頭</h3><p class="sidebar-gesture">單指拖曳旋轉，可繞到水下。雙指捏合縮放。</p></section>
+  </div>
+</dialog>
 <p class="fallback" id="fallback" hidden>這個瀏覽器目前無法顯示 3D 場景。你仍可寫靈修、查看日記和備份。</p>
 <div class="notice" id="notice" role="status" hidden></div>
 <div class="notice" id="pier-prayer-notice" role="status" hidden></div>
@@ -468,7 +488,8 @@ select{font:inherit;width:100%;padding:10px;border:1px solid #b8ccc7;border-radi
 				TOUCH_ROTATE: 3,
 				TOUCH_PAN: 4,
 				TOUCH_DOLLY_PAN: 5,
-				TOUCH_DOLLY_ROTATE: 6
+				TOUCH_DOLLY_ROTATE: 6,
+				TOUCH_DOLLY: 7
 			};
 			let state = STATE.NONE;
 			const EPS = 0.000001; // current position in spherical coordinates
@@ -857,9 +878,9 @@ select{font:inherit;width:100%;padding:10px;border:1px solid #b8ccc7;border-radi
 
 				const dx = event.touches[ 0 ].pageX - event.touches[ 1 ].pageX;
 				const dy = event.touches[ 0 ].pageY - event.touches[ 1 ].pageY;
-				const distance = Math.sqrt( dx * dx + dy * dy );
+				const distance = Math.max( 1, Math.hypot( dx, dy ) );
 				dollyEnd.set( 0, distance );
-				dollyDelta.set( 0, Math.pow( dollyEnd.y / dollyStart.y, scope.zoomSpeed ) );
+				dollyDelta.set( 0, Math.pow( dollyEnd.y / Math.max( 1, dollyStart.y ), scope.zoomSpeed ) );
 				dollyOut( dollyDelta.y );
 				dollyStart.copy( dollyEnd );
 
@@ -1074,6 +1095,7 @@ select{font:inherit;width:100%;padding:10px;border:1px solid #b8ccc7;border-radi
 
 				if ( scope.enabled === false ) return;
 				event.preventDefault(); // prevent scrolling
+				if ( scope.touchZoomOnly ) scope.clearMomentum();
 
 				switch ( event.touches.length ) {
 
@@ -1100,6 +1122,15 @@ select{font:inherit;width:100%;padding:10px;border:1px solid #b8ccc7;border-radi
 						break;
 
 					case 2:
+						if ( scope.touchZoomOnly ) {
+
+							if ( scope.enableZoom === false ) return;
+							handleTouchStartDolly( event );
+							state = STATE.TOUCH_DOLLY;
+							break;
+
+						}
+
 						switch ( scope.touches.TWO ) {
 
 							case THREE.TOUCH.DOLLY_PAN:
@@ -1162,6 +1193,12 @@ select{font:inherit;width:100%;padding:10px;border:1px solid #b8ccc7;border-radi
 					case STATE.TOUCH_DOLLY_ROTATE:
 						if ( scope.enableZoom === false && scope.enableRotate === false ) return;
 						handleTouchMoveDollyRotate( event );
+						scope.update();
+						break;
+
+					case STATE.TOUCH_DOLLY:
+						if ( scope.enableZoom === false ) return;
+						handleTouchMoveDolly( event );
 						scope.update();
 						break;
 
@@ -1385,6 +1422,39 @@ const GraceIsland = (() => {
   const unlockOrder=['adelie','seal','emperor','bear','rockhopper','dolphin','chick','whale','orca','beluga','narwhal','magellanic'];
   const $ = id => document.getElementById(id);
   const panel = $('panel'), content = $('panel-content');
+  const sidebar = $('mobile-sidebar'), menuButton = $('mobile-menu');
+  const mobileLayout = matchMedia('(max-width:600px), (pointer:coarse) and (max-width:950px)');
+  const sidebarItems = [
+    [document.querySelector('.card'), $('sidebar-progress')],
+    [document.querySelector('.nav'), $('sidebar-journal')],
+    [document.querySelector('.view'), $('sidebar-view')],
+    [document.querySelector('.focus'), $('sidebar-view')],
+    [$('music-toggle'), $('sidebar-view')]
+  ].map(([item, destination]) => {
+    const anchor = document.createComment('Desktop position');
+    item.before(anchor);
+    return {item, destination, anchor};
+  });
+  function arrangeMenu() {
+    if (sidebar.open) sidebar.close();
+    menuButton.setAttribute('aria-expanded','false');
+    for (const {item, destination, anchor} of sidebarItems) {
+      if (mobileLayout.matches) destination.append(item);
+      else anchor.after(item);
+    }
+  }
+  arrangeMenu();
+  mobileLayout.addEventListener('change',arrangeMenu);
+  menuButton.onclick = () => {
+    if (sidebar.open) return;
+    sidebar.showModal();
+    menuButton.setAttribute('aria-expanded','true');
+  };
+  $('close-sidebar').onclick = () => sidebar.close();
+  sidebar.addEventListener('close',() => menuButton.setAttribute('aria-expanded',String(sidebar.open)));
+  sidebar.addEventListener('click',event => {
+    if (event.target === sidebar && event.clientX >= sidebar.getBoundingClientRect().right) sidebar.close();
+  });
   const viewport=globalThis.visualViewport;
   if(viewport){
     let previousHeight=viewport.height;
@@ -1553,6 +1623,7 @@ const GraceIsland = (() => {
     route = page;
     $('panel-title').textContent = title;
     content.replaceChildren(node);
+    if (sidebar.open) sidebar.close();
     if (!panel.open) panel.showModal();
     panel.scrollTop = 0;
   }
@@ -2952,6 +3023,9 @@ const skyDome=new THREE.Mesh(new THREE.SphereGeometry(300,24,16),skyMat);scene.a
 const camera=new THREE.PerspectiveCamera(40,1,0.1,400);
 camera.position.set(21,16,25);
 const controls=new THREE.OrbitControls(camera,canvas);
+controls.touchZoomOnly=true;
+controls.touches.ONE=THREE.TOUCH.ROTATE;
+const touchInput=matchMedia('(pointer: coarse)');
 controls.target.set(0,.75,1);controls.enableDamping=true;controls.dampingFactor=.24;
 const orbitLimit=Math.PI*.76;
 controls.minDistance=3;controls.maxDistance=80;controls.maxPolarAngle=orbitLimit;
@@ -5252,7 +5326,6 @@ function followResident(dt){
 function setWaterFollow(active){
   waterFollow=active;
   stopFollowButton.hidden=!active;
-  controls.touches.TWO=active?THREE.TOUCH.DOLLY_ROTATE:THREE.TOUCH.DOLLY_PAN;
 }
 function stopFollowing(){
   setWaterFollow(false);
@@ -5261,7 +5334,11 @@ function stopFollowing(){
   if(fly)settleCamera();
   tracking=null;
 }
-document.getElementById('reset-view').onclick=resetView;
+document.getElementById('reset-view').onclick=()=>{
+  const sidebar=document.getElementById('mobile-sidebar');
+  if(sidebar.open)sidebar.close();
+  resetView();
+};
 function slideDepth(value){
   stopFollowing();
   controls.clearMomentum();
@@ -5292,26 +5369,6 @@ function slideDepth(value){
   controls.update();
   if(!diving)setDiving(false);
 }
-let depthSwipe=null;
-canvas.addEventListener('touchstart',event=>{
-  if(event.touches.length!==1){depthSwipe=null;return}
-  const finger=event.touches[0];
-  depthSwipe={x:finger.clientX,y:finger.clientY,amount:depthAmount,mode:null};
-},{capture:true,passive:true});
-canvas.addEventListener('touchmove',event=>{
-  if(!depthSwipe||event.touches.length!==1)return;
-  const finger=event.touches[0];
-  const dx=finger.clientX-depthSwipe.x,dy=finger.clientY-depthSwipe.y;
-  if(!depthSwipe.mode&&Math.hypot(dx,dy)>9)depthSwipe.mode=Math.abs(dy)>Math.abs(dx)*1.3?'depth':'orbit';
-  if(!depthSwipe.mode){event.stopImmediatePropagation();return}
-  if(depthSwipe.mode!=='depth'||(waterFollow&&rotating))return;
-  event.preventDefault();event.stopImmediatePropagation();
-  press=null;
-  slideDepth(depthSwipe.amount-dy*.0048);
-},{capture:true,passive:false});
-function endDepthSwipe(){depthSwipe=null}
-canvas.addEventListener('touchend',endDepthSwipe);
-canvas.addEventListener('touchcancel',endDepthSwipe);
 const hintEl=document.querySelector('.hint');let hintTxt='';
 const cameraModeButton=document.getElementById('camera-mode');
 let rotating=false;
@@ -5320,8 +5377,6 @@ function setCameraMode(rotate){
   controls.clearMomentum();
   controls.mouseButtons.LEFT=THREE.MOUSE.PAN;
   controls.mouseButtons.RIGHT=THREE.MOUSE.ROTATE;
-  controls.touches.ONE=rotate?THREE.TOUCH.ROTATE:THREE.TOUCH.PAN;
-  controls.touches.TWO=waterFollow?THREE.TOUCH.DOLLY_ROTATE:THREE.TOUCH.DOLLY_PAN;
   cameraModeButton.setAttribute('aria-pressed',rotate);
   cameraModeButton.textContent=rotate?'旋轉中':'旋轉';
 }
@@ -5333,7 +5388,7 @@ canvas.addEventListener('pointerdown',event=>{
   press=pointers.size===1&&event.button===0 ? [event.clientX,event.clientY] : null;
   if(waterFollow){
     if(pointers.size>1)panStart=null;
-    else if(event.pointerType==='touch' ? !rotating : event.button===0&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey){
+    else if(event.pointerType!=='touch'&&event.button===0&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey){
       panStart={id:event.pointerId,x:event.clientX,y:event.clientY};
     }
   }else stopFollowing();
@@ -5347,7 +5402,7 @@ window.addEventListener('pointermove',event=>{
   }
   if(press&&pointers.has(event.pointerId)&&Math.hypot(event.clientX-press[0],event.clientY-press[1])>7)press=null;
 });
-window.addEventListener('blur',()=>{pointers.clear();press=null;depthSwipe=null;panStart=null});
+window.addEventListener('blur',()=>{pointers.clear();press=null;panStart=null});
 window.addEventListener('pointerup',event=>{
   if(panStart?.id===event.pointerId)panStart=null;
   if(!pointers.delete(event.pointerId))return;
@@ -5659,8 +5714,8 @@ function tick(){
     c.y=Math.max(c.y,SB(c.x,c.z)+1.2,H(c.x,c.z)+.5);
     camera.lookAt(controls.target);
   }
-  const ht=waterFollow?'跟拍中 · 可旋轉及縮放':matchMedia('(pointer: coarse)').matches
-    ? `左右${rotating?'旋轉':'平移'} · 上滑下潛／下滑上浮`
+  const ht=waterFollow?'跟拍中 · 可旋轉及縮放':touchInput.matches
+    ? '單指旋轉 · 雙指捏合縮放'
     : '左鍵平移 · 右鍵旋轉可下潛';
   if(ht!==hintTxt){hintTxt=ht;hintEl.textContent=ht}
   renderer.render(scene,camera);requestAnimationFrame(tick);
