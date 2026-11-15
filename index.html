@@ -42,8 +42,6 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,canvas:focus-vis
 .nav .primary:hover,.primary:hover{background:#194845}
 .focus{right:max(26px,env(safe-area-inset-right));bottom:calc(25px + env(safe-area-inset-bottom));padding:5px 9px;border-radius:16px}
 .focus{display:flex;gap:4px}
-#camera-mode{white-space:nowrap}
-#camera-mode[aria-pressed=true]{background:var(--deep);color:white}
 .hint{color:#f6fffb;text-shadow:0 1px 6px #193c46,0 1px 3px #193c46;position:fixed;left:50%;transform:translateX(-50%);bottom:calc(88px + env(safe-area-inset-bottom));margin:0;font-size:12px;white-space:nowrap;pointer-events:none}
 .notice{left:50%;top:calc(13px + env(safe-area-inset-top));z-index:3;transform:translateX(-50%);max-width:calc(100vw - 24px);width:max-content;padding:11px 16px;background:#244e4e;color:white;border-radius:12px;font-size:13px}
 .fallback{position:fixed;top:42%;left:50%;transform:translateX(-50%);width:min(430px,calc(100vw - 32px));padding:18px;border-radius:16px;background:var(--paper);text-align:center}
@@ -112,7 +110,6 @@ select{font:inherit;width:100%;padding:10px;border:1px solid #b8ccc7;border-radi
   .mobile-controls{display:flex;position:fixed;align-items:center;gap:8px;z-index:2}
   .mobile-bottom{left:50%;transform:translateX(-50%);bottom:calc(12px + env(safe-area-inset-bottom))}
   #mobile-menu{min-height:44px;padding-inline:20px;background:#f8fbf5;box-shadow:0 3px 18px #12364030}
-  .sidebar-body #camera-mode{display:none}
   .brand{top:calc(16px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);pointer-events:none}
   .brand h1{font-size:17px;white-space:nowrap}
   .brand-icon,.brand p,.hint{display:none}
@@ -141,14 +138,13 @@ select{font:inherit;width:100%;padding:10px;border:1px solid #b8ccc7;border-radi
   <div id="penguin-roster" class="penguin-roster" aria-label="五種企鵝的居民數量"></div>
   <p id="next-region">寫下第一篇靈修，迎接一隻企鵝。</p>
 </aside>
-<p class="hint" aria-hidden="true">拖曳平移 · 滾輪或雙指捏合縮放</p>
+<p class="hint" aria-hidden="true">拖曳旋轉 · 滾輪或雙指捏合縮放</p>
 <div class="view" role="group" aria-label="場景光線與鏡頭深度">
   <button id="t-day" aria-pressed="true">白天</button>
   <button id="t-dusk" aria-pressed="false">黃昏</button>
   <button id="t-night" aria-pressed="false">極光</button>
 </div>
 <div class="focus" role="group" aria-label="鏡頭操作">
-  <button class="soft" id="camera-mode" type="button" aria-pressed="false">旋轉</button>
   <button class="soft" id="stop-follow" type="button" hidden>停止跟拍</button>
   <button class="soft" id="reset-view" type="button">回到島上</button>
 </div>
@@ -160,6 +156,7 @@ select{font:inherit;width:100%;padding:10px;border:1px solid #b8ccc7;border-radi
   <button id="journal">日記</button>
   <button id="guide">圖鑑</button>
   <button id="backup">備份</button>
+  <button id="cloud-account">帳號與同步</button>
   <button id="shared-islands">群島</button>
 </nav>
 <div class="mobile-controls mobile-bottom">
@@ -1289,35 +1286,43 @@ const PENGUIN_OUTFITS = Object.freeze({
   '':'原本造型',pastor:'牧師',warrior:'戰士',angel:'天使',gardener:'園丁',dress:'花冠禮服',
   prayer:'禱告者',priest:'祭司',shepherd:'好牧人',evangelist:'傳福音的人'
 });
-// Fill these two public values once before publishing the shared GitHub Pages link.
+// Set the two public Supabase values before enabling online features.
 const GRACE_CLOUD = Object.freeze({
-  url: '',
-  publishableKey: '',
+  url: 'https://gplxmkbuolwgfptxfyeb.supabase.co',
+  publishableKey: 'sb_publishable_jJY_W7zQiU2W9pLw6HjoeA_Sp97Qlzq',
   room: 'grace-island'
 });
+const CloudConnection = (() => {
+  let ready;
+  const configured=()=>/^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(GRACE_CLOUD.url)&&GRACE_CLOUD.publishableKey.startsWith('sb_publishable_');
+  function get(){
+    if(!configured())throw Error('雲端服務尚未設定。');
+    if(!ready)ready=import('https://esm.sh/@supabase/supabase-js@2.49.1')
+      .then(module=>module.createClient(GRACE_CLOUD.url,GRACE_CLOUD.publishableKey,{auth:{flowType:'pkce'}}))
+      .catch(error=>{ready=undefined;throw error});
+    return ready;
+  }
+  return {configured,get};
+})();
 const Archipelago = (() => {
-  let client, ready, snapshot, connected=false, pending=false, running=false, offset=0;
+  let client, joinedOwner, snapshot, connected=false, pending=false, running=false, offset=0;
   let lastRows=[], renderer, errorMessage='', timer, name='';
   const pageSize=8;
-  const configured=()=>/^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(GRACE_CLOUD.url)&&GRACE_CLOUD.publishableKey.startsWith('sb_publishable_');
+  const {configured}=CloudConnection;
   const identityKey='grace-island.cloud-name.'+GRACE_CLOUD.room;
   try{name=localStorage.getItem(identityKey)||''}catch{}
   async function initialize(){
     if(!configured())throw Error('共享平台尚未設定。請依 DEPLOY.md 填入 Supabase 連線設定。');
-    if(!ready)ready=(async()=>{
-      const module=await import('https://esm.sh/@supabase/supabase-js@2.49.1');
-      client=module.createClient(GRACE_CLOUD.url,GRACE_CLOUD.publishableKey);
-      const session=await client.auth.getSession();
-      if(session.error)throw session.error;
-      if(!session.data.session){
-        const result=await client.auth.signInAnonymously();
-        if(result.error)throw result.error;
-      }
-      const result=await client.auth.getUser();
+    client=await CloudConnection.get();
+    const session=await client.auth.getSession();
+    if(session.error)throw session.error;
+    if(!session.data.session){
+      const result=await client.auth.signInAnonymously();
       if(result.error)throw result.error;
-      return result.data.user.id;
-    })().catch(error=>{ready=undefined;throw error});
-    return ready;
+    }
+    const result=await client.auth.getUser();
+    if(result.error)throw result.error;
+    return result.data.user.id;
   }
   function publicSnapshot(state){
     const counts=new Map();
@@ -1334,7 +1339,7 @@ const Archipelago = (() => {
     if(running||!connected||!snapshot)return;
     running=true;
     try{
-      const id=await initialize();
+      const id=joinedOwner;
       while(pending&&connected){
         pending=false;
         const result=await client.from('grace_islands').upsert({
@@ -1362,7 +1367,7 @@ const Archipelago = (() => {
   async function join(islandName){
     if(!islandName.trim())throw Error('請輸入島名。');
     name=islandName.trim().slice(0,40);
-    await initialize();
+    joinedOwner=await initialize();
     localStorage.setItem(identityKey,name);
     connected=true;pending=true;
     await upload();
@@ -1377,6 +1382,11 @@ const Archipelago = (() => {
   }
   return {
     configured,join,load,
+    disconnect(){
+      connected=false;pending=false;joinedOwner=undefined;offset=0;lastRows=[];
+      clearInterval(timer);
+      renderer?.show([]);
+    },
     update(state){snapshot=publicSnapshot(state);pending=true;void upload()},
     bind(api){renderer=api},
     overview(){renderer?.overview()},
@@ -1386,6 +1396,160 @@ const Archipelago = (() => {
     publicSnapshot
   };
 })();
+
+function createPrivateJournal({empty,decode,readGuest,onAccount,onData,onStatus}){
+  const table='grace_private_journals';
+  const prefix='grace-island.private.v1.'+GRACE_CLOUD.url+'.';
+  let client,user,running=false,choice=null,message='',started,subscribed=false;
+
+  function cache(id=user.id){
+    const raw=localStorage.getItem(prefix+id);
+    if(!raw)return null;
+    const saved=JSON.parse(raw);
+    return {...saved,data:decode(saved.data)};
+  }
+  function save(id,record,display=false){
+    localStorage.setItem(prefix+id,JSON.stringify(record));
+    if(display)onData(record.data);
+  }
+  function changeAccount(next){
+    const signedInWithGoogle=next?.identities?.some(identity=>identity.provider==='google')||
+      next?.app_metadata?.provider==='google';
+    const account=signedInWithGoogle&&!next.is_anonymous?next:null;
+    if(account?.id===user?.id)return;
+    user=account;
+    choice=null;
+    message='';
+    let data;
+    try{data=user?cache()?.data||empty():readGuest()}
+    catch{data=empty();message='無法讀取這台裝置的存檔。'}
+    onAccount(data);
+    onStatus();
+    void sync();
+  }
+  function start(){
+    if(!CloudConnection.configured()||location.protocol==='file:')return Promise.resolve();
+    if(!started)started=(async()=>{
+      client=await CloudConnection.get();
+      if(!subscribed){
+        client.auth.onAuthStateChange((_event,session)=>{
+          setTimeout(()=>changeAccount(session?.user),0);
+        });
+        subscribed=true;
+      }
+      const {data,error}=await client.auth.getSession();
+      if(error)throw error;
+      changeAccount(data.session?.user);
+    })().catch(error=>{started=undefined;throw error});
+    return started;
+  }
+  async function authorize(){
+    if(location.protocol==='file:')throw Error('請從正式網站開啟遊戲，再使用 Google 登入。');
+    await start();
+    if(!client)throw Error('Google 登入尚未設定。');
+    const redirectTo=location.origin+location.pathname.replace(/\/index\.html$/,'/');
+    sessionStorage.setItem('grace-island.google-return','1');
+    const {error}=await client.auth.signInWithOAuth({
+      provider:'google',options:{redirectTo,queryParams:{prompt:'select_account'}}
+    });
+    if(error){sessionStorage.removeItem('grace-island.google-return');throw error}
+  }
+  async function signOut(){
+    const {error}=await client.auth.signOut({scope:'local'});
+    if(error)throw error;
+    changeAccount(null);
+  }
+  const hasProgress=data=>data.total||data.gratitude.length||data.anger.length||data.progress.days.length;
+  async function fetchSave(id){
+    const {data,error}=await client.from(table).select('revision,save_data').eq('owner_id',id).maybeSingle();
+    if(error)throw error;
+    return data?{revision:data.revision,data:decode(data.save_data),dirty:false}:null;
+  }
+  async function writeSave(id,local){
+    const payload={revision:local.revision+1,save_data:local.data};
+    if(!local.revision){
+      const {error}=await client.from(table).insert({owner_id:id,...payload});
+      if(error?.code==='23505')return false;
+      if(error)throw error;
+      return true;
+    }
+    const {data,error}=await client.from(table).update(payload)
+      .eq('owner_id',id).eq('revision',local.revision).select('revision').maybeSingle();
+    if(error)throw error;
+    return Boolean(data);
+  }
+  let retry=false;
+  async function sync(){
+    if(!user||choice)return;
+    if(running){retry=true;return}
+    const id=user.id;
+    running=true;message='正在同步…';
+    onStatus();
+    try{
+      const remote=await fetchSave(id);
+      if(user?.id!==id)return;
+      const local=cache(id);
+      if(!local&&!remote&&hasProgress(readGuest())){
+        choice={type:'guest'};
+      }else if(!local||!local.dirty){
+        if(remote&&(!local||remote.revision>local.revision))save(id,remote,true);
+        else if(!local)save(id,{revision:0,data:empty(),dirty:false},true);
+      }else if(local.revision!==(remote?.revision||0)){
+        if(local.revision<(remote?.revision||0)){
+          if(JSON.stringify(local.data)===JSON.stringify(remote.data))save(id,remote);
+          else choice={type:'conflict',remote};
+        }
+      }else if(await writeSave(id,local)){
+        if(user?.id!==id)return;
+        const latest=cache(id);
+        if(latest?.revision===local.revision){
+          const changed=JSON.stringify(latest.data)!==JSON.stringify(local.data);
+          save(id,{revision:local.revision+1,data:latest.data,dirty:changed});
+          if(changed)retry=true;
+        }
+      }else{
+        retry=true;
+      }
+      message='';
+    }catch{
+      if(user?.id===id)message='同步失敗。已儲存的本機變更會保留，請稍後重試。';
+    }finally{
+      running=false;
+      onStatus();
+      if(retry){retry=false;setTimeout(sync,0)}
+    }
+  }
+  function resolveChoice(action){
+    if(!user||!choice)return;
+    const local=cache(),{type,remote}=choice;
+    if(type==='guest'&&!local){
+      const data=action==='local'?readGuest():empty();
+      save(user.id,{revision:0,data,dirty:action==='local'},true);
+    }else if(type==='conflict'&&local?.revision<remote.revision){
+      if(action==='local')save(user.id,{revision:remote.revision,data:local.data,dirty:true});
+      else save(user.id,remote,true);
+    }
+    choice=null;
+    void sync();
+  }
+  return {
+    start,authorize,signOut,sync,resolveChoice,
+    get active(){return Boolean(user)},
+    get storageKey(){return user?prefix+user.id:null},
+    read(){return cache()?.data||empty()},
+    write(data){
+      const local=cache();
+      if(!local||choice?.type==='guest')throw Error('請先從「帳號與同步」選擇要使用的存檔。');
+      save(user.id,{...local,data,dirty:true});
+      void sync();
+    },
+    get status(){
+      let dirty=false;
+      try{dirty=Boolean(user&&cache()?.dirty)}catch{}
+      return {user,choice,message,dirty};
+    }
+  };
+}
 
 const GraceIsland = (() => {
   const key = 'grace-island.journal.v1';
@@ -1549,9 +1713,12 @@ const GraceIsland = (() => {
     }
     return state.progress.outfits.filter(grant=>grant.target===id).map(grant=>grant.outfit);
   }
-  function read() {
+  function readGuest() {
     const saved = localStorage.getItem(key);
     return saved === null ? empty() : decode(JSON.parse(saved));
+  }
+  function read() {
+    return privateJournal.active ? privateJournal.read() : readGuest();
   }
   function nameOf(entry) {
     const name=variants[entry.variant] || byId.get(entry.species).name;
@@ -1599,7 +1766,8 @@ const GraceIsland = (() => {
     let updated;
     try {
       updated = decode(change(replace ? state : read()));
-      localStorage.setItem(key,JSON.stringify(updated));
+      if(privateJournal.active)privateJournal.write(updated);
+      else localStorage.setItem(key,JSON.stringify(updated));
     } catch (error) {
       if (error instanceof DOMException) throw Error('無法儲存到瀏覽器。請確認儲存空間及網站資料權限。');
       throw error;
@@ -1953,10 +2121,7 @@ const GraceIsland = (() => {
     if (entry.scripture) wrap.append(el('p',entry.scripture,'entry-scripture'));
     wrap.append(el('p',entry.body,'entry-body'));
     const actions = el('div',undefined,'actions');
-    if (stage && ['dolphin','whale','orca','beluga','narwhal'].includes(entry.species)){
-      actions.append(button('跟拍','primary',()=>{panel.close();stage.focus(id,true)}));
-    }
-    if (stage) actions.append(button('在島上尋找','primary',() => {panel.close();stage.focus(id)}));
+    if (stage) actions.append(button('跟拍','primary',()=>{stage.focus(id,true);panel.close()}));
     actions.append(button('編輯','soft',() => formFor(entry)),button('刪除','danger',() => remove(entry)),button('所有日記','soft',journal));
     wrap.append(actions);
     show(titleOf(entry),wrap,'detail');
@@ -2143,7 +2308,7 @@ const GraceIsland = (() => {
         showError(error,problem instanceof SyntaxError ? Error('無法讀取這個 JSON 檔案。') : problem);
       }
     };
-    wrap.append(el('p','紀錄存放在目前的瀏覽器。匯出的 JSON 含靈修、感恩、動物配對與解鎖進度。','sub'),actions,file,error);
+    wrap.append(el('p','匯出的 JSON 包含目前存檔的靈修、感恩、生氣紀錄、動物配對與解鎖進度。','sub'),actions,file,error);
     show('備份與還原',wrap,'backup');
   }
   function confirmImport(data) {
@@ -2155,13 +2320,13 @@ const GraceIsland = (() => {
       panel.close();
       notify('已還原 ' + data.entries.length + ' 篇靈修與島嶼進度。');
     }),button('取消','soft',backup));
-    wrap.append(el('p','這份備份有 '+data.entries.length+' 篇靈修與 '+data.gratitude.length+' 則感恩。還原會取代此瀏覽器目前的紀錄、動物與進度。'),error,actions);
+    wrap.append(el('p','這份備份有 '+data.entries.length+' 篇靈修與 '+data.gratitude.length+' 則感恩。還原會取代目前使用的存檔、動物與進度。'+(privateJournal.active?' 變更也會同步到帳號。':'')),error,actions);
     show('還原備份？',wrap,'import');
   }
   async function sharedIslands(){
     const wrap=el('div');
     const status=Archipelago.status;
-    const intro=el('p','加入同一片海域，參觀其他人的島嶼與靈修小生物。公開資料包含島名、動物種類與數量、地形進度。心得與日期保留在你的瀏覽器。','sub');
+    const intro=el('p','加入同一片海域，參觀其他人的島嶼與靈修小生物。公開資料包含島名、動物種類與數量、地形進度。群島玩家看不到你的心得與日期。','sub');
     const field=el('label','你的島名','field'),input=el('input');
     input.maxLength=40;input.value=status.name;input.placeholder='例如：晨光島';field.append(input);
     const error=el('p',undefined,'error');error.setAttribute('role','alert');
@@ -2294,6 +2459,78 @@ const GraceIsland = (() => {
   if(navigator.userActivation?.hasBeenActive)startMusic();
   else startMusic(false);
 
+  let accountError='',shownSyncChoice=null;
+  function cloudAccount(){
+    const wrap=el('div'),info=el('p',undefined,'sub'),actions=el('div',undefined,'actions');
+    const error=el('p',accountError,'error');
+    error.setAttribute('role','alert');
+    const {user,choice,message,dirty}=privateJournal.status;
+    function action(label,style,run){
+      const control=button(label,style,async()=>{
+        control.disabled=true;
+        accountError='';
+        try{await run()}
+        catch(problem){
+          accountError=problem.message||'操作失敗，請重試。';
+          if(panel.open&&route==='account')cloudAccount();
+        }
+        finally{control.disabled=false}
+      });
+      actions.append(control);
+    }
+    if(!CloudConnection.configured()){
+      info.textContent='Google 登入與同步尚未啟用。你的紀錄會儲存在目前的瀏覽器，可從「備份」匯出。';
+    }else if(location.protocol==='file:'){
+      info.textContent='請從正式網站開啟遊戲，再使用 Google 登入。';
+    }else if(!user){
+      info.textContent='使用 Google 帳號，在不同裝置讀取同一座島和私人日記。';
+      action('使用 Google 登入','primary',privateJournal.authorize);
+    }else{
+      info.textContent='已登入'+(user.email?' '+user.email:'')+'。日記與進度只對你的帳號開放。';
+      if(choice?.type==='guest'){
+        wrap.append(info,el('p','這個帳號還沒有雲端存檔。要把這台裝置的訪客日記與島嶼進度複製到帳號嗎？'));
+        action('匯入訪客存檔','primary',()=>privateJournal.resolveChoice('local'));
+        action('使用空白帳號存檔','soft',()=>privateJournal.resolveChoice('cloud'));
+      }else if(choice?.type==='conflict'){
+        wrap.append(info,el('p','這台裝置和雲端有不同的變更。請選擇要繼續使用哪一份存檔。'));
+        action('使用雲端版本','primary',()=>privateJournal.resolveChoice('cloud'));
+        action('用本機版本更新雲端','soft',()=>privateJournal.resolveChoice('local'));
+      }else{
+        const status=el('p',message||(dirty?'本機有待同步的變更。':'已與雲端同步。'),'sub');
+        status.setAttribute('role','status');
+        wrap.append(info,status);
+        action('立即同步','soft',privateJournal.sync);
+      }
+      if(dirty)wrap.append(el('p','登出後，待同步的變更會先留在這台裝置，重新登入同一帳號後可繼續同步。','sub'));
+      action('登出','soft',privateJournal.signOut);
+    }
+    if(!info.parentNode)wrap.append(info);
+    wrap.append(actions,error);
+    show('帳號與同步',wrap,'account');
+  }
+  const privateJournal=createPrivateJournal({
+    empty,decode,readGuest,
+    onAccount(data){
+      Archipelago.disconnect();
+      state=data;
+      if(panel.open&&route!=='account')panel.close();
+      refresh();
+    },
+    onData(data){
+      state=data;
+      refresh();
+    },
+    onStatus(){
+      const {choice}=privateJournal.status;
+      if(choice?.type==='conflict'&&choice!==shownSyncChoice){
+        notify('同步遇到兩份不同的存檔，請從「帳號與同步」選擇版本。');
+      }
+      shownSyncChoice=choice;
+      if(panel.open&&route==='account')cloudAccount();
+      else if(!panel.open&&choice?.type==='guest')cloudAccount();
+    }
+  });
+  $('cloud-account').onclick=()=>{accountError='';cloudAccount()};
   $('new-entry').onclick = () => formFor();
   $('new-gratitude').onclick = () => gratitudeForm();
   $('new-anger').onclick = () => angerForm();
@@ -2301,9 +2538,10 @@ const GraceIsland = (() => {
   $('guide').onclick = guide;
   $('backup').onclick = backup;
   $('close-panel').onclick = () => panel.close();
+  panel.addEventListener('close',() => {if(!panel.open)stage?.closePreview()});
   panel.addEventListener('click',event => {if (event.target === panel) panel.close()});
   window.addEventListener('storage',event => {
-    if (event.key !== key && event.key !== null) return;
+    if (event.key !== (privateJournal.storageKey||key) && event.key !== null) return;
     try {
       state = read();
       refresh();
@@ -2311,11 +2549,25 @@ const GraceIsland = (() => {
       if (panel.open && route === 'guide') guide();
       if (panel.open && route === 'gratitude-list') gratitudeList();
       if (panel.open && route === 'anger-list') angerList();
+      if (panel.open && route === 'account') cloudAccount();
+      if(privateJournal.active)void privateJournal.sync();
     } catch {notify('另一個視窗的資料無法讀取。')}
   });
   try {state = read()}
   catch {notify('無法讀取島嶼存檔。若有 JSON 備份，可從「備份」還原。')}
   refresh();
+  if(CloudConnection.configured()&&location.protocol!=='file:'){
+    void privateJournal.start().then(()=>{
+      if(sessionStorage.getItem('grace-island.google-return')==='1'){
+        sessionStorage.removeItem('grace-island.google-return');
+        if(!privateJournal.active)accountError='Google 登入未完成，請再試一次。';
+        cloudAccount();
+      }
+    }).catch(()=>notify('暫時無法連上帳號服務。'));
+    window.addEventListener('online',privateJournal.sync);
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden)void privateJournal.sync()});
+    setInterval(()=>{if(!document.hidden)void privateJournal.sync()},30000);
+  }
   return {
     neighbor,
     connect(api) {stage = api;refresh()},
@@ -3021,16 +3273,17 @@ const skyMat=new THREE.ShaderMaterial({side:THREE.BackSide,depthWrite:false,fog:
 }`});
 const skyDome=new THREE.Mesh(new THREE.SphereGeometry(300,24,16),skyMat);scene.add(skyDome);
 const camera=new THREE.PerspectiveCamera(40,1,0.1,400);
-camera.position.set(21,16,25);
+const homePosition=new THREE.Vector3(21,16,25),homeTarget=new THREE.Vector3(0,.75,0);
+camera.position.copy(homePosition);
 const controls=new THREE.OrbitControls(camera,canvas);
 controls.touchZoomOnly=true;
 controls.touches.ONE=THREE.TOUCH.ROTATE;
+controls.mouseButtons.LEFT=controls.mouseButtons.RIGHT=THREE.MOUSE.ROTATE;
 const touchInput=matchMedia('(pointer: coarse)');
-controls.target.set(0,.75,1);controls.enableDamping=true;controls.dampingFactor=.24;
+controls.target.copy(homeTarget);controls.enableDamping=true;controls.dampingFactor=.24;
 const orbitLimit=Math.PI*.76;
 controls.minDistance=3;controls.maxDistance=80;controls.maxPolarAngle=orbitLimit;
-controls.enablePan=true;controls.screenSpacePanning=false;
-controls.panSpeed=.85;controls.rotateSpeed=.62;
+controls.enablePan=false;controls.rotateSpeed=.62;
 
 /* ---------- lights: soft, low-contrast like the game ---------- */
 const hemi=new THREE.HemisphereLight('#ffffff','#9fd0d8',0.95);scene.add(hemi);
@@ -5032,8 +5285,7 @@ const dolphinBuoys=[buoy(15.5,16,'#568f9d'),buoy(21,11,'#568f9d')];
 const whaleBuoys=[buoy(-23,19,'#bd704e'),buoy(-27,14,'#bd704e')];
 const sharedGeometry=new Set([FOOT,BLOB_GEO]),sharedMaterial=new Set([A_EYE,BLOB_MAT]);
 const seaKinds=new Set(['dolphin','whale','orca','beluga','narwhal']);
-let tracking=null,fly=null,diving=false,worldTime=0;
-const homePosition=new THREE.Vector3(21,16,25),homeTarget=new THREE.Vector3(0,.75,1);
+let tracking=null,fly=null,worldTime=0;
 const ray=new THREE.Raycaster(),pointer=new THREE.Vector2(),worldPoint=new THREE.Vector3();
 const pointers=new Set();
 let press=null;
@@ -5143,7 +5395,7 @@ function retire(id,resident){
   if(emoteIndex!==-1) emotes.splice(emoteIndex,1);
   for(const p of penguins)if(p.act?.partner===model) p.act.partner=null;
   residents.delete(id);
-  if(tracking===id)resetView();
+  if(tracking===id)returnToIsland();
 }
 const neighboringIslands=new THREE.Group();scene.add(neighboringIslands);
 const neighborAnimations=[];
@@ -5211,9 +5463,9 @@ function showNeighbors(rows){
   });
 }
 function archipelagoOverview(){
-  stopFollowing();visitingArchipelago=true;setDiving(false);
+  clearAnimalFocus();visitingArchipelago=true;
   controls.maxDistance=190;
-  moveCamera(new THREE.Vector3(72,87,110),new THREE.Vector3(0,0,0),1.2);
+  moveCamera(new THREE.Vector3(72,87,110),homeTarget,1.2);
 }
 Archipelago.bind({show:showNeighbors,overview:archipelagoOverview});
 
@@ -5249,37 +5501,72 @@ function syncResidents(state){
   dolphinBuoys.forEach(b=>b.visible=state.total>=5||present.has('dolphin'));
   whaleBuoys.forEach(b=>b.visible=state.total>=8||present.has('whale'));
 }
-let surfaceView=null,depthAmount=0,waterFollow=false;
+let following=false,previewUntil=0,journalPreview=false;
 const stopFollowButton=document.getElementById('stop-follow');
-stopFollowButton.onclick=stopFollowing;
-function setDiving(active){
-  diving=active;
-  trackedFish=null;
-  if(!active){surfaceView=null;depthAmount=0}
-}
+stopFollowButton.onclick=()=>{
+  const sidebar=document.getElementById('mobile-sidebar');
+  if(sidebar.open)sidebar.close();
+  returnToIsland();
+};
 function moveCamera(position,target,duration){
   controls.clearMomentum();
   fly={t:0,dur:duration,p0:camera.position.clone(),t0:controls.target.clone(),p1:position,t1:target};
   controls.enabled=false;
-  controls.minPolarAngle=0;
-  controls.maxPolarAngle=Math.PI;
 }
 function settleCamera(){
+  if(fly){
+    camera.position.copy(fly.p1);
+    controls.target.copy(fly.t1);
+  }
   fly=null;
   controls.enabled=true;
-  controls.minPolarAngle=diving?.05:0;
-  controls.maxPolarAngle=waterFollow?Math.PI-.05:orbitLimit;
+  controls.update();
+}
+function clearAnimalFocus(){
+  following=false;
+  previewUntil=0;
+  journalPreview=false;
+  stopFollowButton.hidden=true;
+  trackedFish=null;
+  tracking=null;
+  fly=null;
+  controls.enabled=true;
+  controls.clearMomentum();
+  controls.maxPolarAngle=orbitLimit;
+}
+function returnToIsland(){
+  const offset=camera.position.clone().sub(controls.target);
+  clearAnimalFocus();
+  visitingArchipelago=false;
+  controls.maxDistance=80;
+  // Pull back from animal close-ups so the island stays in view at the same angles.
+  offset.setLength(THREE.MathUtils.clamp(offset.length(),22,80));
+  controls.target.copy(homeTarget);
+  camera.position.copy(homeTarget).add(offset);
+  controls.update();
+  camera.updateMatrixWorld();
 }
 function resetView(){
   visitingArchipelago=false;controls.maxDistance=80;
-  stopFollowing();setDiving(false);
+  clearAnimalFocus();
   moveCamera(homePosition.clone(),homeTarget.clone(),reduce?.2:1.15);
 }
-function focusGratitude(id,follow=false){
+function beginAnimalFocus(follow,fromJournal){
+  clearAnimalFocus();
+  visitingArchipelago=false;
+  controls.maxDistance=80;
+  following=follow;
+  journalPreview=fromJournal;
+  previewUntil=follow||fromJournal?0:clock.elapsedTime+6;
+  stopFollowButton.hidden=!follow;
+}
+function closePreview(){
+  if(journalPreview)returnToIsland();
+}
+function focusGratitude(id,follow=false,fromJournal=false){
   const fish=gratitudeFish.get(id),ray=!fish&&GratitudeRays.has(id),shark=!fish&&!ray&&AngerSharks.has(id);
   if(!fish&&!ray&&!shark)return;
-  stopFollowing();visitingArchipelago=false;controls.maxDistance=80;setDiving(false);
-  setWaterFollow(follow);
+  beginAnimalFocus(follow,fromJournal);
   trackedFish=id;fishSelectionTime=-Infinity;
   const target=new THREE.Vector3();
   const note=fish?positionMackerel(fish,worldTime,target):ray?GratitudeRays.pose(id,worldTime,target):AngerSharks.pose(id,worldTime,target);
@@ -5287,23 +5574,22 @@ function focusGratitude(id,follow=false){
   offset.y=follow?-.65:fish?.52:shark?1.2:note.kind==='manta'?1.4:1.1;
   moveCamera(target.clone().add(offset),target,reduce?.2:1);
 }
-function focusResident(id,follow=false){
+function focusResident(id,follow=false,fromJournal=false){
   if(!residents.get(id)?.model.g.visible)return;
-  stopFollowing();visitingArchipelago=false;controls.maxDistance=80;setDiving(false);
+  beginAnimalFocus(follow,fromJournal);
   tracking=id;
   const resident=residents.get(id),target=resident.model.g.getWorldPosition(new THREE.Vector3());
   const marine=seaKinds.has(resident.entry.species),whale=resident.entry.species==='whale'||resident.entry.species==='orca',midWhale=resident.entry.species==='beluga'||resident.entry.species==='narwhal';
-  setWaterFollow(follow&&marine);
-  if(!waterFollow)target.y=marine?.2:target.y+.65;
+  if(!marine)target.y+=.65;
   const offset=whale?new THREE.Vector3(7,5.8,9):midWhale?new THREE.Vector3(5.2,4.2,6.6):new THREE.Vector3(3.3,2.7,4.2);
-  if(waterFollow)offset.setLength(whale?9:midWhale?6.5:4.6).setY(-1.7);
+  if(follow&&marine)offset.setLength(whale?9:midWhale?6.5:4.6).setY(-1.7);
   if(marine)offset.set(Math.sign(target.x||1)*Math.abs(offset.x),offset.y,Math.sign(target.z||1)*Math.abs(offset.z));
   moveCamera(target.clone().add(offset),target,reduce?.2:1.2);
 }
 function followResident(dt){
   const fish=gratitudeFish.get(trackedFish),ray=!fish&&GratitudeRays.has(trackedFish),shark=!fish&&!ray&&AngerSharks.has(trackedFish),resident=residents.get(tracking);
-  if(!fish&&!ray&&!shark&&!resident){
-    if(waterFollow)stopFollowing();
+  if(!fish&&!ray&&!shark&&!resident?.model.g.visible){
+    if(following||journalPreview||previewUntil)returnToIsland();
     return;
   }
   const target=worldPoint;
@@ -5312,7 +5598,7 @@ function followResident(dt){
   else if(shark)AngerSharks.pose(trackedFish,worldTime,target);
   else{
     resident.model.g.getWorldPosition(target);
-    if(!waterFollow)target.y=seaKinds.has(resident.entry.species)?.2:target.y+.65;
+    if(!seaKinds.has(resident.entry.species))target.y+=.65;
   }
   const blend=1-Math.exp(-dt*7);
   if(fly){
@@ -5323,88 +5609,26 @@ function followResident(dt){
     controls.target.add(target);camera.position.add(target);
   }
 }
-function setWaterFollow(active){
-  waterFollow=active;
-  stopFollowButton.hidden=!active;
-}
-function stopFollowing(){
-  setWaterFollow(false);
-  controls.maxPolarAngle=orbitLimit;
-  trackedFish=null;
-  if(fly)settleCamera();
-  tracking=null;
-}
 document.getElementById('reset-view').onclick=()=>{
   const sidebar=document.getElementById('mobile-sidebar');
   if(sidebar.open)sidebar.close();
   resetView();
 };
-function slideDepth(value){
-  stopFollowing();
-  controls.clearMomentum();
-  const amount=THREE.MathUtils.clamp(value,0,1);
-  depthAmount=amount;
-  if(!surfaceView){
-    const position=camera.position.clone(),target=controls.target.clone();
-    const heading=new THREE.Vector3(position.x,0,position.z);
-    if(heading.lengthSq()<.01)heading.set(0,0,1);
-    heading.normalize();
-    const offshore=heading.clone().multiplyScalar(terrainTotal>=3?31:24);
-    offshore.y=-3.2;
-    const underwaterTarget=offshore.clone().addScaledVector(heading,-9);
-    underwaterTarget.y=-2.25;
-    surfaceView={position,target,offshore,underwaterTarget};
-  }
-  visitingArchipelago=false;
-  controls.maxDistance=80;
-  const {position,target,offshore,underwaterTarget}=surfaceView;
-  const coast=smooth(0,.55,amount),descent=smooth(.22,1,amount);
-  camera.position.lerpVectors(position,offshore,coast);
-  camera.position.y=THREE.MathUtils.lerp(position.y,offshore.y,descent);
-  controls.target.lerpVectors(target,underwaterTarget,coast);
-  controls.target.y=THREE.MathUtils.lerp(target.y,underwaterTarget.y,descent);
-  diving=amount>0;
-  controls.minPolarAngle=0;
-  controls.maxPolarAngle=orbitLimit;
-  controls.update();
-  if(!diving)setDiving(false);
-}
 const hintEl=document.querySelector('.hint');let hintTxt='';
-const cameraModeButton=document.getElementById('camera-mode');
-let rotating=false;
-function setCameraMode(rotate){
-  rotating=rotate;
-  controls.clearMomentum();
-  controls.mouseButtons.LEFT=THREE.MOUSE.PAN;
-  controls.mouseButtons.RIGHT=THREE.MOUSE.ROTATE;
-  cameraModeButton.setAttribute('aria-pressed',rotate);
-  cameraModeButton.textContent=rotate?'旋轉中':'旋轉';
+function endTimedPreview(){
+  if(previewUntil)returnToIsland();
 }
-cameraModeButton.onclick=()=>setCameraMode(!rotating);
-setCameraMode(false);
-let panStart=null;
 canvas.addEventListener('pointerdown',event=>{
+  endTimedPreview();
   pointers.add(event.pointerId);
   press=pointers.size===1&&event.button===0 ? [event.clientX,event.clientY] : null;
-  if(waterFollow){
-    if(pointers.size>1)panStart=null;
-    else if(event.pointerType!=='touch'&&event.button===0&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey){
-      panStart={id:event.pointerId,x:event.clientX,y:event.clientY};
-    }
-  }else stopFollowing();
 },true);
-canvas.addEventListener('pointercancel',event=>{pointers.delete(event.pointerId);press=null;panStart=null});
+canvas.addEventListener('pointercancel',event=>{pointers.delete(event.pointerId);press=null});
 window.addEventListener('pointermove',event=>{
-  if(panStart?.id===event.pointerId&&pointers.has(event.pointerId)
-    &&Math.hypot(event.clientX-panStart.x,event.clientY-panStart.y)>7){
-    panStart=null;
-    stopFollowing();
-  }
   if(press&&pointers.has(event.pointerId)&&Math.hypot(event.clientX-press[0],event.clientY-press[1])>7)press=null;
 });
-window.addEventListener('blur',()=>{pointers.clear();press=null;panStart=null});
+window.addEventListener('blur',()=>{pointers.clear();press=null});
 window.addEventListener('pointerup',event=>{
-  if(panStart?.id===event.pointerId)panStart=null;
   if(!pointers.delete(event.pointerId))return;
   const start=press;
   press=null;
@@ -5420,41 +5644,33 @@ window.addEventListener('pointerup',event=>{
   if(!hit)return;
   if(hit.object===fishMesh||hit.object===fishTails){
     const fish=visibleFish[hit.instanceId];
-    if(fish)GraceIsland.openGratitude(fish.id);
+    if(fish){focusGratitude(fish.id,false,true);GraceIsland.openGratitude(fish.id)}
     return;
   }
   let object=hit.object;
   while(object&&!object.userData.journalId&&!object.userData.neighborId&&!object.userData.waterNoteId)object=object.parent;
   if(!object)return;
-  if(object.userData.waterNoteId){GraceIsland.openGratitude(object.userData.waterNoteId);return}
+  if(object.userData.waterNoteId){
+    focusGratitude(object.userData.waterNoteId,false,true);
+    GraceIsland.openGratitude(object.userData.waterNoteId);return;
+  }
   if(object.userData.neighborId){Archipelago.inspect(object.userData.neighborId);return}
   const id=object.userData.journalId;
   const p=residents.get(id).model;
   if(p.feet&&p.jy===0){p.jy=.01;p.vy=3.5;p.flapT=.8}
+  focusResident(id,false,true);
   GraceIsland.open(id);
 });
-canvas.addEventListener('wheel',()=>{if(!waterFollow)stopFollowing()},{capture:true,passive:true});
+canvas.addEventListener('wheel',endTimedPreview,{capture:true,passive:true});
 canvas.addEventListener('keydown',event=>{
-  if(event.key==='PageUp'||event.key==='PageDown'){
-    event.preventDefault();
-    slideDepth(depthAmount+(event.key==='PageDown'?.12:-.12));
-    return;
-  }
-  const moves={ArrowLeft:[-.13,0],ArrowRight:[.13,0],ArrowUp:[0,-.1],ArrowDown:[0,.1]};
+  const moves={ArrowLeft:[-.13,0],ArrowRight:[.13,0],ArrowUp:[0,-.1],ArrowDown:[0,.1],PageUp:[0,-.12],PageDown:[0,.12]};
   const move=moves[event.key];
   if(!move&&!['+','=','-'].includes(event.key))return;
   event.preventDefault();
-  if(!waterFollow||(move&&!rotating))stopFollowing();
+  endTimedPreview();
+  if(!controls.enabled)return;
   controls.clearMomentum();
   const offset=camera.position.clone().sub(controls.target);
-  if(move&&!rotating){
-    const forward=new THREE.Vector3(-offset.x,0,-offset.z).normalize();
-    const right=new THREE.Vector3().crossVectors(forward,camera.up);
-    const step=offset.length()*.035;
-    const shift=right.multiplyScalar(move[0]*step/.13).addScaledVector(forward,-move[1]*step/.1);
-    controls.target.add(shift);camera.position.add(shift);
-    controls.update();return;
-  }
   const angle=new THREE.Spherical().setFromVector3(offset);
   if(move){angle.theta+=move[0];angle.phi=THREE.MathUtils.clamp(angle.phi+move[1],Math.max(.05,controls.minPolarAngle),controls.maxPolarAngle)}
   else angle.radius=THREE.MathUtils.clamp(angle.radius*(event.key==='-'?1.12:.89),controls.minDistance,controls.maxDistance);
@@ -5606,9 +5822,10 @@ function updatePierPrayer(time){
   });
   eyes.forEach(eye=>{eye.scale.y=1.9*(1-.94*kneel)});
 }
+let renderedCameraHeight=camera.position.y;
 function tick(){
   const elapsed=Math.min(clock.getDelta(),.05),dt=elapsed*(reduce?.35:1),t=worldTime+=dt,k=Math.min(1,elapsed*2);
-  uwV+=(smooth(-.5,.08,-camera.position.y)-uwV)*Math.min(1,elapsed*9);
+  uwV+=(smooth(-.5,.08,-renderedCameraHeight)-uwV)*Math.min(1,elapsed*9);
   skyCur.lerp(tmpC.set(target.sky),k);scene.background.copy(skyCur);scene.fog.color.copy(skyCur);skyMat.uniforms.bot.value.copy(skyCur);skyMat.uniforms.top.value.lerp(tmpC.set(target.top),k);
   sun.color.lerp(tmpC.set(target.sun),k);sun.intensity+=(target.si-sun.intensity)*k;
   hemi.intensity+=(target.hemi+.34*uwV-hemi.intensity)*k;
@@ -5705,22 +5922,26 @@ function tick(){
   updatePierPrayer(clock.elapsedTime);
   neighborAnimations.forEach(animate=>animate(t));
   followResident(elapsed);
+  if(previewUntil&&clock.elapsedTime>=previewUntil)returnToIsland();
   updateCelebration(elapsed);
   if(fly){fly.t+=elapsed;const e=smooth(0,1,fly.t/fly.dur);camera.position.lerpVectors(fly.p0,fly.p1,e);controls.target.lerpVectors(fly.t0,fly.t1,e);
     if(fly.t>=fly.dur)settleCamera();}
   controls.update();
-  if(!fly&&camera.position.y<0){
-    const c=camera.position;
-    c.y=Math.max(c.y,SB(c.x,c.z)+1.2,H(c.x,c.z)+.5);
-    camera.lookAt(controls.target);
-  }
-  const ht=waterFollow?'跟拍中 · 可旋轉及縮放':touchInput.matches
+  const c=camera.position,orbitHeight=c.y;
+  // Keep terrain clearance out of the orbit math so it cannot shrink the radius.
+  if(!fly&&c.y<0)c.y=Math.max(c.y,SB(c.x,c.z)+1.2,H(c.x,c.z)+.5);
+  if(c.y!==orbitHeight)camera.lookAt(controls.target);
+  renderedCameraHeight=c.y;
+  const ht=following?'跟拍中 · 繞著生物旋轉':touchInput.matches
     ? '單指旋轉 · 雙指捏合縮放'
-    : '左鍵平移 · 右鍵旋轉可下潛';
+    : '左右鍵拖曳旋轉 · 滾輪縮放';
   if(ht!==hintTxt){hintTxt=ht;hintEl.textContent=ht}
-  renderer.render(scene,camera);requestAnimationFrame(tick);
+  renderer.render(scene,camera);
+  c.y=orbitHeight;
+  if(c.y!==renderedCameraHeight)camera.lookAt(controls.target);
+  requestAnimationFrame(tick);
 }
-GraceIsland.connect({sync:syncResidents,focus:focusResident,focusGratitude,celebrate});
+GraceIsland.connect({sync:syncResidents,focus:focusResident,focusGratitude,closePreview,celebrate});
 tick();
 } catch (error) {
   console.error(error);
