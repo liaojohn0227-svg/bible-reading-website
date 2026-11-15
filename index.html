@@ -1306,7 +1306,9 @@ const CloudConnection = (() => {
   function get(){
     if(!configured())throw Error('雲端服務尚未設定。');
     if(!ready)ready=import('https://esm.sh/@supabase/supabase-js@2.49.1')
-      .then(module=>module.createClient(GRACE_CLOUD.url,GRACE_CLOUD.publishableKey,{auth:{flowType:'pkce'}}))
+      .then(module=>module.createClient(GRACE_CLOUD.url,GRACE_CLOUD.publishableKey,{
+        auth:{flowType:'pkce',persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}
+      }))
       .catch(error=>{ready=undefined;throw error});
     return ready;
   }
@@ -1408,13 +1410,82 @@ const Archipelago = (() => {
 function createPrivateJournal({empty,decode,readGuest,onAccount,onData,onStatus}){
   const table='grace_private_journals';
   const prefix='grace-island.private.v1.'+GRACE_CLOUD.url+'.';
+  const lists=['entries','gratitude','anger'];
+  const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+  const sameTimes=(a,b)=>Object.keys(a).length===Object.keys(b).length&&Object.keys(a).every(id=>a[id]===b[id]);
   let client,user,running=false,choice=null,message='',started,subscribed=false,syncDone,linkedWriting=false;
 
+  function decodeTimes(value){
+    return Object.fromEntries(Object.entries(value||{}).filter(([id,stamp])=>
+      id.length<=100&&Number.isSafeInteger(stamp)&&stamp>0));
+  }
+  function changedTimes(local,data){
+    const times=new Map(Object.entries(local.times));
+    const now=Date.now();
+    for(const list of lists){
+      const before=new Map(local.data[list].map(note=>[note.id,note]));
+      const after=new Map(data[list].map(note=>[note.id,note]));
+      for(const id of new Set([...before.keys(),...after.keys()])){
+        if(!same(before.get(id),after.get(id))){
+          times.set(id,Math.max(now,(times.get(id)||0)+1));
+        }
+      }
+    }
+    return Object.fromEntries(times);
+  }
+  function mergeSaves(local,remote){
+    const base=local.base;
+    if(!base||!remote)return null;
+    const data={...remote.data}, times=new Map(Object.entries({...local.times,...remote.times}));
+    let duplicateDevotions=0;
+    const timestamp=(record,id)=>Object.hasOwn(record.times||{},id)?record.times[id]:0;
+    for(const list of lists){
+      const original=new Map(base.data[list].map(note=>[note.id,note]));
+      const device=new Map(local.data[list].map(note=>[note.id,note]));
+      const cloud=new Map(remote.data[list].map(note=>[note.id,note]));
+      data[list]=[];
+      for(const id of new Set([...cloud.keys(),...device.keys(),...original.keys()])){
+        const start=original.get(id), left=device.get(id), right=cloud.get(id);
+        const localChanged=!same(start,left), remoteChanged=!same(start,right);
+        const leftTime=timestamp(local,id), rightTime=timestamp(remote,id);
+        let useLocal=localChanged&&!remoteChanged;
+        if(localChanged&&remoteChanged){
+          if(list==='entries'&&!start&&left&&right)duplicateDevotions++;
+          if(left?.groupId||right?.groupId||start?.groupId){
+            // Linked journal text and revision come from the group transaction.
+            useLocal=false;
+          }else if(!same(left,right)){
+            const originalTime=timestamp(base,id);
+            if(leftTime<=originalTime||rightTime<=originalTime)return null;
+            useLocal=leftTime>rightTime;
+          }else useLocal=leftTime>rightTime;
+        }
+        const chosen=useLocal?left:right;
+        if(chosen)data[list].push(chosen);
+        const time=useLocal?leftTime:rightTime;
+        if(time)times.set(id,time);
+        else times.delete(id);
+      }
+    }
+    const localDelta=local.data.total-base.data.total, remoteDelta=remote.data.total-base.data.total;
+    if(localDelta<0||remoteDelta<0)return null;
+    const originalDevotions=new Set(base.data.entries.map(note=>note.id));
+    const addedDevotions=record=>record.data.entries.some(note=>!originalDevotions.has(note.id));
+    if(localDelta&&remoteDelta&&!addedDevotions(local)&&!addedDevotions(remote))return null;
+    data.total=Math.max(data.entries.length,base.data.total+localDelta+remoteDelta-duplicateDevotions);
+    const a=local.data.progress,b=remote.data.progress,prior=base.data.progress;
+    if(!same(a.outfits,prior.outfits)&&!same(b.outfits,prior.outfits)&&!same(a.outfits,b.outfits))return null;
+    data.progress={
+      days:[...new Set([...a.days,...b.days])].sort(),
+      outfits:same(a.outfits,prior.outfits)?b.outfits:a.outfits
+    };
+    return {data:decode(data),times:Object.fromEntries(times)};
+  }
   function cache(id=user.id){
     const raw=localStorage.getItem(prefix+id);
     if(!raw)return null;
     const saved=JSON.parse(raw);
-    return {...saved,data:decode(saved.data)};
+    return {...saved,data:decode(saved.data),times:decodeTimes(saved.times)};
   }
   function save(id,record,display=false){
     localStorage.setItem(prefix+id,JSON.stringify(record));
@@ -1471,10 +1542,10 @@ function createPrivateJournal({empty,decode,readGuest,onAccount,onData,onStatus}
   async function fetchSave(id){
     const {data,error}=await client.from(table).select('revision,save_data').eq('owner_id',id).maybeSingle();
     if(error)throw error;
-    return data?{revision:data.revision,data:decode(data.save_data),dirty:false}:null;
+    return data?{revision:data.revision,data:decode(data.save_data),times:decodeTimes(data.save_data.syncTimes),dirty:false}:null;
   }
   async function writeSave(id,local){
-    const payload={revision:local.revision+1,save_data:local.data};
+    const payload={revision:local.revision+1,save_data:{...local.data,syncTimes:local.times}};
     if(!local.revision){
       const {error}=await client.from(table).insert({owner_id:id,...payload});
       if(error?.code==='23505')return false;
@@ -1506,15 +1577,24 @@ function createPrivateJournal({empty,decode,readGuest,onAccount,onData,onStatus}
         else if(!local)save(id,{revision:0,data:empty(),dirty:false},true);
       }else if(local.revision!==(remote?.revision||0)){
         if(local.revision<(remote?.revision||0)){
-          if(JSON.stringify(local.data)===JSON.stringify(remote.data))save(id,remote);
-          else choice={type:'conflict',remote};
+          if(same(local.data,remote.data)&&(!local.base||sameTimes(local.times,remote.times)))save(id,remote);
+          else{
+            const merged=mergeSaves(local,remote);
+            if(!merged)choice={type:'conflict',remote};
+            else if(same(merged.data,remote.data)&&sameTimes(merged.times,remote.times))save(id,remote,true);
+            else{
+              save(id,{...merged,revision:remote.revision,base:remote,dirty:true},true);
+              retry=true;
+            }
+          }
         }
       }else if(await writeSave(id,local)){
         if(user?.id!==id)return;
         const latest=cache(id);
         if(latest?.revision===local.revision){
-          const changed=JSON.stringify(latest.data)!==JSON.stringify(local.data);
-          save(id,{revision:local.revision+1,data:latest.data,dirty:changed});
+          const changed=!same(latest.data,local.data)||!sameTimes(latest.times,local.times);
+          save(id,{revision:local.revision+1,data:latest.data,times:latest.times,dirty:changed,
+            base:changed&&latest.base?{data:local.data,times:local.times}:undefined});
           if(changed)retry=true;
         }
       }else{
@@ -1537,7 +1617,7 @@ function createPrivateJournal({empty,decode,readGuest,onAccount,onData,onStatus}
       const data=action==='local'?readGuest():empty();
       save(user.id,{revision:0,data,dirty:action==='local'},true);
     }else if(type==='conflict'&&local?.revision<remote.revision){
-      if(action==='local')save(user.id,{revision:remote.revision,data:local.data,dirty:true});
+      if(action==='local')save(user.id,{revision:remote.revision,data:local.data,times:local.times,dirty:true});
       else save(user.id,remote,true);
     }
     choice=null;
@@ -1556,7 +1636,8 @@ function createPrivateJournal({empty,decode,readGuest,onAccount,onData,onStatus}
       if(user?.id!==id)return false;
       const current=cache(id);
       if(current?.revision===local.revision&&!current.dirty){
-        save(id,{revision:remote.revision,data:decode(remote.save_data),dirty:false},true);
+        save(id,{revision:remote.revision,data:decode(remote.save_data),
+          times:decodeTimes(remote.save_data.syncTimes),dirty:false},true);
       }
       return true;
     }finally{
@@ -1569,11 +1650,12 @@ function createPrivateJournal({empty,decode,readGuest,onAccount,onData,onStatus}
     get active(){return Boolean(user)},
     get storageKey(){return user?prefix+user.id:null},
     read(){return cache()?.data||empty()},
-    write(data){
+    write(data,replace=false){
       if(linkedWriting)throw Error('正在同步共用紀錄，請稍候再試。');
       const local=cache();
       if(!local||choice?.type==='guest')throw Error('請先從「帳號與同步」選擇要使用的存檔。');
-      save(user.id,{...local,data,dirty:true});
+      const base=replace?undefined:local.dirty?local.base:{data:local.data,times:local.times};
+      save(user.id,{...local,data,times:changedTimes(local,data),base,dirty:true});
       void sync();
     },
     get status(){
@@ -1668,7 +1750,7 @@ const GraceIsland = (() => {
     fitDialog();
   }
   const empty = () => ({version:1,total:0,entries:[],gratitude:[],anger:[],progress:{days:[],outfits:[]}});
-  let state = empty(), stage, noticeTimer, route, groupIsland;
+  let state = empty(), stage, noticeTimer, route, routeNoteId, groupIsland;
 
   function validDate(date) {
     if (typeof date !== 'string' || !/^\d{4}-\d\d-\d\d$/.test(date) || date.startsWith('0000')) return false;
@@ -1761,6 +1843,7 @@ const GraceIsland = (() => {
   function read() {
     return privateJournal.active ? privateJournal.read() : readGuest();
   }
+  let restoringAccount=CloudConnection.configured()&&location.protocol!=='file';
   function nameOf(entry) {
     const name=variants[entry.variant] || byId.get(entry.species).name;
     return entry.outfit ? name+'（'+PENGUIN_OUTFITS[entry.outfit]+'）' : name;
@@ -1807,10 +1890,11 @@ const GraceIsland = (() => {
     noticeTimer = setTimeout(() => $('notice').hidden = true,6500);
   }
   function commit(change, replace = false) {
+    if(restoringAccount)throw Error('正在載入帳號與島嶼，請稍候再儲存。');
     let updated;
     try {
       updated = decode(change(replace ? state : read()));
-      if(privateJournal.active)privateJournal.write(updated);
+      if(privateJournal.active)privateJournal.write(updated,replace);
       else localStorage.setItem(key,JSON.stringify(updated));
     } catch (error) {
       if (error instanceof DOMException) throw Error('無法儲存到瀏覽器。請確認儲存空間及網站資料權限。');
@@ -1831,8 +1915,9 @@ const GraceIsland = (() => {
     node.onclick = action;
     return node;
   }
-  function show(title, node, page) {
+  function show(title, node, page, noteId) {
     route = page;
+    routeNoteId = noteId;
     $('panel-title').textContent = title;
     content.replaceChildren(node);
     if (sidebar.open) sidebar.close();
@@ -1915,7 +2000,7 @@ const GraceIsland = (() => {
     }
     actions.append(button('感恩紀錄','soft',gratitudeList));
     wrap.append(actions);
-    show('感恩心得',wrap,'gratitude-detail');
+    show('感恩心得',wrap,'gratitude-detail',id);
   }
   function removeSharedGratitude(entry){
     const wrap=el('div'),error=el('p',undefined,'error'),actions=el('div',undefined,'actions');
@@ -2037,7 +2122,7 @@ const GraceIsland = (() => {
     actions.append(button(entry.released?'已放生':'生氣紀錄','soft',entry.released?releasedList:angerList));
     wrap.append(actions);
     if(canEditGroupEntry(entry)&&!entry.released&&!entry.reflection)wrap.append(el('p','先補寫你現在怎麼看這件事，才能放生牠。','sub'));
-    show('生氣紀錄',wrap,'anger-detail');
+    show('生氣紀錄',wrap,'anger-detail',id);
   }
   function reflectionForm(entry){
     const form=el('form'),label=el('label','我現在怎麼看這件事？','field'),body=el('textarea');
@@ -2212,7 +2297,7 @@ const GraceIsland = (() => {
     if(canEditGroupEntry(entry))actions.append(button('編輯','soft',() => formFor(entry)),button('刪除','danger',() => remove(entry)));
     actions.append(button('所有日記','soft',journal));
     wrap.append(actions);
-    show(titleOf(entry),wrap,'detail');
+    show(titleOf(entry),wrap,'detail',id);
   }
   function remove(entry) {
     const wrap = el('div');
@@ -2705,6 +2790,7 @@ const GraceIsland = (() => {
     notify('已進入 '+island.name+'。');
   }
   async function commitRecord(kind,change){
+    if(restoringAccount)throw Error('正在載入帳號與島嶼，請稍候再儲存。');
     if(recordWriting)throw Error('請等上一筆共用紀錄儲存完成。');
     const group=groupIsland, before=group?.snapshot??read(), after=decode(change(before));
     const collection=journalLists[kind];
@@ -2847,6 +2933,7 @@ const GraceIsland = (() => {
     onData(data){
       state=data;
       refresh();
+      refreshOpenPrivateJournal();
     },
     onStatus(){
       const {choice}=privateJournal.status;
@@ -2871,15 +2958,23 @@ const GraceIsland = (() => {
   panel.addEventListener('click',event => {if (event.target === panel) panel.close()});
   document.addEventListener('visibilitychange',refreshActiveGroup);
   window.addEventListener('online',refreshActiveGroup);
+  function refreshOpenPrivateJournal(){
+    if(groupIsland||!panel.open)return;
+    if(route==='journal')journal();
+    if(route==='guide')guide();
+    if(route==='detail')detail(routeNoteId);
+    if(route==='gratitude-list')gratitudeList();
+    if(route==='gratitude-detail')gratitudeDetail(routeNoteId);
+    if(route==='anger-list')angerList();
+    if(route==='anger-released')releasedList();
+    if(route==='anger-detail')angerDetail(routeNoteId);
+  }
   window.addEventListener('storage',event => {
     if (event.key !== (privateJournal.storageKey||key) && event.key !== null) return;
     try {
       state = read();
       refresh();
-      if (panel.open && route === 'journal') journal();
-      if (panel.open && route === 'guide') guide();
-      if (panel.open && route === 'gratitude-list') gratitudeList();
-      if (panel.open && route === 'anger-list') angerList();
+      refreshOpenPrivateJournal();
       if (panel.open && route === 'account') cloudAccount();
       if(privateJournal.active)void privateJournal.sync();
     } catch {notify('另一個視窗的資料無法讀取。')}
@@ -2897,10 +2992,20 @@ const GraceIsland = (() => {
         if(pendingInvite||(fromGroup&&privateJournal.active))groupLobby();
         else cloudAccount();
       }else if(pendingInvite)groupLobby();
-    }).catch(()=>notify('暫時無法連上帳號服務。'));
-    window.addEventListener('online',privateJournal.sync);
-    document.addEventListener('visibilitychange',()=>{if(!document.hidden)void privateJournal.sync()});
-    setInterval(()=>{if(!document.hidden)void privateJournal.sync()},30000);
+    }).catch(()=>notify('暫時無法連上帳號服務。')).finally(()=>{restoringAccount=false});
+    let resumeTimer;
+    function resumePrivateSync(){
+      if(document.hidden||restoringAccount)return;
+      clearTimeout(resumeTimer);
+      resumeTimer=setTimeout(()=>{
+        void privateJournal.start().then(privateJournal.sync).catch(()=>{});
+      },80);
+    }
+    window.addEventListener('online',resumePrivateSync);
+    window.addEventListener('focus',resumePrivateSync);
+    window.addEventListener('pageshow',event=>{if(event.persisted)resumePrivateSync()});
+    document.addEventListener('visibilitychange',resumePrivateSync);
+    setInterval(()=>{if(privateJournal.status.dirty)resumePrivateSync()},30000);
   }
   return {
     neighbor,
