@@ -126,11 +126,18 @@ select{font:inherit;width:100%;padding:10px;border:1px solid #b8ccc7;border-radi
   .sidebar-body #music-toggle{margin-top:8px}
   .sidebar-gesture{margin:8px 0 0;color:var(--muted);font-size:12px;line-height:1.5}
 }
+.group-tools{display:flex;flex-wrap:wrap;gap:5px;margin:10px 0}
+.group-tools button{min-height:42px;padding-inline:11px}
+.group-list{display:grid;gap:7px;margin-bottom:16px}
+.group-list button{text-align:left}
+.group-status{min-height:1.7em;margin:5px 0}
+.nav button[hidden]{display:none}
+.brand h1{max-width:min(63vw,420px);text-overflow:ellipsis;overflow:hidden;white-space:nowrap}
 </style>
 </head>
 <body>
 <canvas id="stage" tabindex="0" aria-label="恩典之島 3D 場景"></canvas>
-<header class="brand"><span class="brand-icon" aria-hidden="true">✦</span><div><h1>恩典之島</h1><p>Grace Island</p></div></header>
+<header class="brand"><span class="brand-icon" aria-hidden="true">✦</span><div><h1 id="island-title">恩典之島</h1><p id="island-mode">Grace Island</p></div></header>
 <aside class="card" aria-label="島嶼進度">
   <p class="eyebrow" id="region-name">初雪灣</p>
   <h2 id="island-count">島上還沒有居民</h2>
@@ -158,6 +165,7 @@ select{font:inherit;width:100%;padding:10px;border:1px solid #b8ccc7;border-radi
   <button id="backup">備份</button>
   <button id="cloud-account">帳號與同步</button>
   <button id="shared-islands">群島</button>
+  <button id="group-islands">小組島</button>
 </nav>
 <div class="mobile-controls mobile-bottom">
   <button class="soft" id="mobile-menu" type="button" aria-expanded="false" aria-controls="mobile-sidebar">☰ 選單</button>
@@ -1400,7 +1408,7 @@ const Archipelago = (() => {
 function createPrivateJournal({empty,decode,readGuest,onAccount,onData,onStatus}){
   const table='grace_private_journals';
   const prefix='grace-island.private.v1.'+GRACE_CLOUD.url+'.';
-  let client,user,running=false,choice=null,message='',started,subscribed=false;
+  let client,user,running=false,choice=null,message='',started,subscribed=false,syncDone,linkedWriting=false;
 
   function cache(id=user.id){
     const raw=localStorage.getItem(prefix+id);
@@ -1480,8 +1488,10 @@ function createPrivateJournal({empty,decode,readGuest,onAccount,onData,onStatus}
   }
   let retry=false;
   async function sync(){
-    if(!user||choice)return;
-    if(running){retry=true;return}
+    if(!user||choice||linkedWriting)return;
+    if(running){retry=true;return syncDone}
+    let complete;
+    syncDone=new Promise(resolve=>{complete=resolve});
     const id=user.id;
     running=true;message='正在同步…';
     onStatus();
@@ -1515,6 +1525,7 @@ function createPrivateJournal({empty,decode,readGuest,onAccount,onData,onStatus}
       if(user?.id===id)message='同步失敗。已儲存的本機變更會保留，請稍後重試。';
     }finally{
       running=false;
+      complete();
       onStatus();
       if(retry){retry=false;setTimeout(sync,0)}
     }
@@ -1532,12 +1543,34 @@ function createPrivateJournal({empty,decode,readGuest,onAccount,onData,onStatus}
     choice=null;
     void sync();
   }
+  async function linkedWrite(run){
+    const id=user?.id;
+    if(!id||linkedWriting)throw Error('請先登入並等待上一筆儲存完成。');
+    await sync();
+    if(user?.id!==id||linkedWriting)throw Error('請重新確認登入帳號。');
+    const local=cache(id);
+    if(!local||choice||local.dirty)throw Error('請先完成「帳號與同步」中的個人島同步，再儲存這篇共用紀錄。');
+    linkedWriting=true;
+    try{
+      const remote=await run(local.revision);
+      if(user?.id!==id)return false;
+      const current=cache(id);
+      if(current?.revision===local.revision&&!current.dirty){
+        save(id,{revision:remote.revision,data:decode(remote.save_data),dirty:false},true);
+      }
+      return true;
+    }finally{
+      linkedWriting=false;
+      void sync();
+    }
+  }
   return {
-    start,authorize,signOut,sync,resolveChoice,
+    start,authorize,signOut,sync,resolveChoice,linkedWrite,
     get active(){return Boolean(user)},
     get storageKey(){return user?prefix+user.id:null},
     read(){return cache()?.data||empty()},
     write(data){
+      if(linkedWriting)throw Error('正在同步共用紀錄，請稍候再試。');
       const local=cache();
       if(!local||choice?.type==='guest')throw Error('請先從「帳號與同步」選擇要使用的存檔。');
       save(user.id,{...local,data,dirty:true});
@@ -1635,7 +1668,7 @@ const GraceIsland = (() => {
     fitDialog();
   }
   const empty = () => ({version:1,total:0,entries:[],gratitude:[],anger:[],progress:{days:[],outfits:[]}});
-  let state = empty(), stage, noticeTimer, route;
+  let state = empty(), stage, noticeTimer, route, groupIsland;
 
   function validDate(date) {
     if (typeof date !== 'string' || !/^\d{4}-\d\d-\d\d$/.test(date) || date.startsWith('0000')) return false;
@@ -1655,7 +1688,7 @@ const GraceIsland = (() => {
           (entry.species === 'penguin' ? !Object.hasOwn(variants,entry.variant) : entry.variant !== '')) throw Error('備份內有不完整的日記、重複的編號或無效的動物資料。');
       ids.add(entry.id);
       const {id,date,title,scripture,body,species,variant} = entry;
-      return {id,date,title,scripture,body,species,variant,outfit};
+      return {id,date,title,scripture,body,species,variant,outfit,...noteLink(entry)};
     });
     const progress=decodeProgress(value.progress,entries);
     const gratitude=value.gratitude===undefined?[]:value.gratitude;
@@ -1665,7 +1698,7 @@ const GraceIsland = (() => {
       if(!entry||!isText(entry.id,100)||!entry.id||ids.has(entry.id)||!validDate(entry.date)||
         !isText(entry.body,12000)||!entry.body.trim()||typeof fish!=='string'||!Object.hasOwn(gratitudeFishKinds,fish))throw Error('備份內有無效或重複的感恩紀錄。');
       ids.add(entry.id);
-      return {id:entry.id,date:entry.date,body:entry.body,fish};
+      return {id:entry.id,date:entry.date,body:entry.body,fish,...noteLink(entry)};
     });
     const anger=value.anger===undefined?[]:value.anger;
     if(!Array.isArray(anger))throw Error('備份內的生氣紀錄格式不正確。');
@@ -1675,10 +1708,18 @@ const GraceIsland = (() => {
         typeof entry.level!=='string'||!Object.hasOwn(angerSharks,entry.level)||!isText(reflection,12000)||(reflectedAt!==''&&!validDate(reflectedAt))||
         (entry.released!==undefined&&typeof entry.released!=='boolean')||(entry.released===true&&!reflection.trim()))throw Error('備份內有無效或重複的生氣紀錄。');
       ids.add(entry.id);
-      return {id:entry.id,date:entry.date,body:entry.body,level:entry.level,reflection,reflectedAt,released:entry.released===true};
+      return {id:entry.id,date:entry.date,body:entry.body,level:entry.level,reflection,reflectedAt,released:entry.released===true,...noteLink(entry)};
     });
     return {version:1,total:value.total,entries,gratitude:gratitudeEntries,anger:angerEntries,progress};
   }
+  function noteLink(entry){
+    if(!entry.groupId)return {};
+    if(!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(entry.groupId)||
+      !Number.isSafeInteger(entry.groupRevision)||entry.groupRevision<1)throw Error('共用日記的連結格式不正確。');
+    return {groupId:entry.groupId,groupRevision:entry.groupRevision};
+  }
+  const islandState=()=>groupIsland?.snapshot ?? state;
+  const previewUnlocked=()=>GRACE_PREVIEW_UNLOCK_ALL&&!groupIsland;
   function decodeProgress(progress,entries) {
     if(progress===undefined)return {
       days:[],outfits:entries.filter(entry=>entry.outfit).map(entry=>({target:entry.id,outfit:entry.outfit,legacy:true}))
@@ -1698,8 +1739,8 @@ const GraceIsland = (() => {
     }
     return {days,outfits};
   }
-  function unlockedCards(total) {
-    const count=GRACE_PREVIEW_UNLOCK_ALL ? unlockOrder.length : 1+Math.floor(total/3);
+  function unlockedCards(total, allowPreview=true) {
+    const count=GRACE_PREVIEW_UNLOCK_ALL&&allowPreview ? unlockOrder.length : 1+Math.floor(total/3);
     return unlockOrder.slice(0,count).map(id=>cardById.get(id));
   }
   function outfitCredit(progress) {
@@ -1729,10 +1770,13 @@ const GraceIsland = (() => {
     const date = new Date();
     return [date.getFullYear(),date.getMonth()+1,date.getDate()].map((n,i) => String(n).padStart(i ? 2 : 4,'0')).join('-');
   }
+  function syncStage(){
+    stage?.sync(groupIsland ? {...groupIsland.snapshot,sharedGroup:true} : state);
+  }
   function refresh() {
-    const {entries,total} = state;
+    const {entries,total} = groupIsland?.snapshot ?? state;
     const terrainMilestones=TERRAIN_MILESTONES;
-    const terrainProgress=GRACE_PREVIEW_UNLOCK_ALL ? Infinity : total;
+    const terrainProgress=GRACE_PREVIEW_UNLOCK_ALL&&!groupIsland ? Infinity : total;
     const current=terrainMilestones.filter(area=>terrainProgress>=area.at).at(-1);
     const next=terrainMilestones.find(area=>area.at>terrainProgress);
     $('region-name').textContent=current?.name || '初雪灣';
@@ -1740,9 +1784,9 @@ const GraceIsland = (() => {
     $('progress').max=next?.at || terrainMilestones.at(-1).at;
     $('progress').value=Math.min(total,$('progress').max);
     $('next-region').textContent=next ? '累積 '+next.at+' 篇，島嶼擴張至'+next.name+'。' : '四片新地形已全部開放。';
-    if(GRACE_PREVIEW_UNLOCK_ALL)$('next-region').textContent='全解鎖試玩中 · 動物、造型和地形已開放。';
-    const nextAnimal=unlockOrder[unlockedCards(total).length];
-    if(nextAnimal)$('next-region').textContent+=' 第 '+(unlockedCards(total).length*3)+' 篇解鎖'+cardById.get(nextAnimal).name+'。';
+    if(terrainProgress===Infinity)$('next-region').textContent='全解鎖試玩中 · 動物、造型和地形已開放。';
+    const nextAnimal=unlockOrder[unlockedCards(total,!groupIsland).length];
+    if(nextAnimal)$('next-region').textContent+=' 第 '+(unlockedCards(total,!groupIsland).length*3)+' 篇解鎖'+cardById.get(nextAnimal).name+'。';
     const roster=$('penguin-roster');
     roster.replaceChildren();
     for(const [variant,label] of Object.entries(variants)){
@@ -1753,7 +1797,7 @@ const GraceIsland = (() => {
       item.setAttribute('aria-label',label+'，'+residents.length+' 隻，查看日記');
       roster.append(item);
     }
-    stage?.sync(state);
+    syncStage();
     Archipelago.update(state);
   }
   function notify(message) {
@@ -1801,6 +1845,7 @@ const GraceIsland = (() => {
   }
   function gratitudeForm(entry){
     const form=el('form'),label=el('label','感恩心得','field'),body=el('textarea');
+    const id=entry?.id||newId();
     body.required=true;body.maxLength=12000;body.value=entry?.body||'';
     label.append(body);
     const error=el('p',undefined,'error');error.hidden=true;error.setAttribute('role','alert');
@@ -1809,29 +1854,31 @@ const GraceIsland = (() => {
     actions.append(save,button('感恩紀錄','soft',gratitudeList));
     const fishChoice=el('select');
     if(!entry){
-      const field=el('label','這則感恩帶來的魚','field'),count=state.gratitude.length;
+      const field=el('label','這則感恩帶來的魚','field'),count=islandState().gratitude.length;
       for(const [id,kind] of Object.entries(gratitudeFishKinds)){
-        const open=GRACE_PREVIEW_UNLOCK_ALL||count>=kind.at,option=el('option',open?kind.name:kind.name+'（累積 '+kind.at+' 則感恩解鎖）');
+        const open=previewUnlocked()||count>=kind.at,option=el('option',open?kind.name:kind.name+'（累積 '+kind.at+' 則感恩解鎖）');
         option.value=id;option.disabled=!open;fishChoice.append(option);
       }
       field.append(fishChoice);form.append(label,field,error,actions);
     }else form.append(label,error,actions);
-    form.onsubmit=event=>{
+    sharedFormInfo(form,entry);
+    form.onsubmit=async event=>{
       event.preventDefault();
       const text=body.value.trim();
       if(!text)return showError(error,Error('請寫下一件感恩的事。'));
       let saved;
       try{
-        commit(current=>{
+        await commitRecord('gratitude',current=>{
           if(entry){
             const previous=current.gratitude.find(item=>item.id===entry.id);
-            if(!previous||previous.body!==entry.body)throw Error('這則感恩已更新，請重新開啟。');
+            if(!previous||previous.body!==entry.body||previous.groupRevision!==entry.groupRevision)throw Error('這則感恩已更新，請重新開啟。');
             saved={...previous,body:text};
             return {...current,gratitude:current.gratitude.map(item=>item.id===saved.id?saved:item)};
           }
-          const id=crypto.randomUUID?.()||Array.from(crypto.getRandomValues(new Uint32Array(4)),n=>n.toString(16).padStart(8,'0')).join('');
+          saved=current.gratitude.find(item=>item.id===id);
+          if(saved)return current;
           const fish=fishChoice.value||'mackerel',kind=gratitudeFishKinds[fish];
-          if(!kind||(!GRACE_PREVIEW_UNLOCK_ALL&&current.gratitude.length<kind.at))throw Error('這種魚還沒有解鎖，請重新選擇。');
+          if(!kind||(!previewUnlocked()&&current.gratitude.length<kind.at))throw Error('這種魚還沒有解鎖，請重新選擇。');
           saved={id,date:today(),body:text,fish};
           return {...current,gratitude:[...current.gratitude,saved]};
         });
@@ -1848,31 +1895,56 @@ const GraceIsland = (() => {
   function gratitudeList(){
     const list=el('div',undefined,'rows');
     list.append(button('記感恩','primary',()=>gratitudeForm()));
-    if(!state.gratitude.length)list.append(el('p',GRACE_PREVIEW_UNLOCK_ALL?'記下一則感恩，選擇一種魚。':'寫下第一則感恩，就會有一隻鯖魚。累積 10 則解鎖魟魚寶寶，20 則解鎖鬼蝠魟。','sub'));
-    for(const entry of [...state.gratitude].reverse()){
+    if(!islandState().gratitude.length)list.append(el('p',previewUnlocked()?'記下一則感恩，選擇一種魚。':'寫下第一則感恩，就會有一隻鯖魚。累積 10 則解鎖魟魚寶寶，20 則解鎖鬼蝠魟。','sub'));
+    for(const entry of [...islandState().gratitude].reverse()){
       const title=entry.body.replace(/\s+/g,' ');
       list.append(row(title.length>42?title.slice(0,42)+'…':title,entry.date+' · '+fishOf(entry).name,fishOf(entry).color,'',()=>gratitudeDetail(entry.id)));
     }
     show('感恩紀錄',list,'gratitude-list');
   }
   function gratitudeDetail(id){
-    const entry=state.gratitude.find(item=>item.id===id);
+    const entry=islandState().gratitude.find(item=>item.id===id);
     if(!entry)return gratitudeList();
     const wrap=el('article'),actions=el('div',undefined,'actions');
     wrap.append(el('p',entry.date+' · '+fishOf(entry).name,'sub'),el('p',entry.body,'entry-body'));
     if(stage)actions.append(button('跟拍','primary',()=>{panel.close();stage.focusGratitude(id,true)}),
       button('去看牠','soft',()=>{panel.close();stage.focusGratitude(id)}));
-    actions.append(button('編輯','soft',()=>gratitudeForm(entry)),button('感恩紀錄','soft',gratitudeList));
+    if(canEditGroupEntry(entry)){
+      actions.append(button('編輯','soft',()=>gratitudeForm(entry)));
+      if(entry.groupId)actions.append(button('刪除','danger',()=>removeSharedGratitude(entry)));
+    }
+    actions.append(button('感恩紀錄','soft',gratitudeList));
     wrap.append(actions);
     show('感恩心得',wrap,'gratitude-detail');
+  }
+  function removeSharedGratitude(entry){
+    const wrap=el('div'),error=el('p',undefined,'error'),actions=el('div',undefined,'actions');
+    error.hidden=true;error.setAttribute('role','alert');
+    actions.append(button('確認刪除','danger',async()=>{
+      try{await commitRecord('gratitude',current=>{
+        if(current.gratitude.find(note=>note.id===entry.id)?.groupRevision!==entry.groupRevision){
+          throw Error('這則感恩已更新，請重新開啟。');
+        }
+        return {...current,gratitude:current.gratitude.filter(note=>note.id!==entry.id)};
+      })}
+      catch(problem){return showError(error,problem)}
+      gratitudeList();
+    }),button('取消','soft',()=>gratitudeDetail(entry.id)));
+    wrap.append(el('p','個人島與小組島上的感恩與對應的魚都會移除。','sub'),error,actions);
+    show('刪除這則感恩？',wrap,'gratitude-remove');
   }
   /* ---------- 生氣紀錄: each anger note becomes a shark in the deep water off the island ---------- */
   // 有點生氣 → blacktip reef shark, 非常生氣 → hammerhead (fixed once written). One editable reflection
   // ("我現在怎麼看這件事？") per note; a shark can only be released after its reflection is written.
   // Released sharks leave the island and wait in the「已放生」list, where they can be brought back or deleted.
-  function newId(){return crypto.randomUUID?.()||Array.from(crypto.getRandomValues(new Uint32Array(4)),n=>n.toString(16).padStart(8,'0')).join('')}
+  function newId(){
+    if(crypto.randomUUID)return crypto.randomUUID();
+    const hex=Array.from(crypto.getRandomValues(new Uint32Array(4)),n=>n.toString(16).padStart(8,'0')).join('');
+    return hex.replace(/^(........)(....)(....)(....)(............)$/,'$1-$2-$3-$4-$5');
+  }
   function angerForm(entry){
     const form=el('form'),label=el('label','生氣的事','field'),body=el('textarea');
+    const id=entry?.id||newId();
     body.required=true;body.maxLength=12000;body.value=entry?.body||'';
     body.placeholder='發生了什麼事？你當時的感受是什麼？';
     label.append(body);
@@ -1887,22 +1959,25 @@ const GraceIsland = (() => {
       field.append(levelChoice);
       form.append(el('p','寫下來，讓牠游進深水裡。之後回來看時，可以補寫你現在怎麼看這件事。','sub'),label,field,el('small','生氣程度存下後不能修改。','sub'),error,actions);
     }else form.append(el('p',angerSharks[entry.level].label+' · '+angerSharks[entry.level].name,'sub'),label,error,actions);
-    form.onsubmit=event=>{
+    sharedFormInfo(form,entry);
+    form.onsubmit=async event=>{
       event.preventDefault();
       const text=body.value.trim();
       if(!text)return showError(error,Error('請寫下發生了什麼事。'));
       let saved;
       try{
-        commit(current=>{
+        await commitRecord('anger',current=>{
           if(entry){
             const previous=current.anger.find(item=>item.id===entry.id);
-            if(!previous||previous.body!==entry.body)throw Error('這則紀錄已更新，請重新開啟。');
+            if(!previous||previous.body!==entry.body||previous.groupRevision!==entry.groupRevision)throw Error('這則紀錄已更新，請重新開啟。');
             saved={...previous,body:text};
             return {...current,anger:current.anger.map(item=>item.id===saved.id?saved:item)};
           }
+          saved=current.anger.find(item=>item.id===id);
+          if(saved)return current;
           const level=levelChoice.value;
           if(!Object.hasOwn(angerSharks,level))throw Error('請選擇生氣程度。');
-          saved={id:newId(),date:today(),body:text,level,reflection:'',reflectedAt:'',released:false};
+          saved={id,date:today(),body:text,level,reflection:'',reflectedAt:'',released:false};
           return {...current,anger:[...current.anger,saved]};
         });
       }catch(problem){return showError(error,problem)}
@@ -1919,17 +1994,17 @@ const GraceIsland = (() => {
     return row(title.length>42?title.slice(0,42)+'…':title,note,kind.color,'',()=>angerDetail(entry.id));
   }
   function angerList(){
-    const list=el('div',undefined,'rows'),active=state.anger.filter(entry=>!entry.released),released=state.anger.filter(entry=>entry.released);
+    const list=el('div',undefined,'rows'),active=islandState().anger.filter(entry=>!entry.released),released=islandState().anger.filter(entry=>entry.released);
     const actions=el('div',undefined,'actions');
     actions.append(button('記生氣','primary',()=>angerForm()));
     if(released.length)actions.append(button('已放生 ('+released.length+')','soft',releasedList));
     list.append(actions);
-    if(!active.length)list.append(el('p',state.anger.length?'島邊的深水裡現在沒有鯊魚。':'寫下一件生氣的事，就會有一隻小鯊魚游進島外的深水。','sub'));
+    if(!active.length)list.append(el('p',islandState().anger.length?'島邊的深水裡現在沒有鯊魚。':'寫下一件生氣的事，就會有一隻小鯊魚游進島外的深水。','sub'));
     for(const entry of [...active].reverse())list.append(angerRow(entry));
     show('生氣紀錄',list,'anger-list');
   }
   function releasedList(){
-    const list=el('div',undefined,'rows'),released=state.anger.filter(entry=>entry.released);
+    const list=el('div',undefined,'rows'),released=islandState().anger.filter(entry=>entry.released);
     list.append(el('p','放生的鯊魚已經離開島邊。你仍可以重讀、補寫，或把牠帶回島上。','sub'));
     if(!released.length)list.append(el('p','還沒有放生的鯊魚。','sub'));
     for(const entry of [...released].reverse())list.append(angerRow(entry));
@@ -1937,7 +2012,7 @@ const GraceIsland = (() => {
     show('已放生',list,'anger-released');
   }
   function angerDetail(id){
-    const entry=state.anger.find(item=>item.id===id);
+    const entry=islandState().anger.find(item=>item.id===id);
     if(!entry)return angerList();
     const kind=angerSharks[entry.level],wrap=el('article'),actions=el('div',undefined,'actions');
     wrap.append(el('p',entry.date+' · '+kind.label+' · '+kind.name+(entry.released?' · 已放生':''),'sub'),el('p',entry.body,'entry-body'));
@@ -1948,18 +2023,20 @@ const GraceIsland = (() => {
     }
     if(stage&&!entry.released)actions.append(button('跟拍','primary',()=>{panel.close();stage.focusGratitude(id,true)}),
       button('去看牠','soft',()=>{panel.close();stage.focusGratitude(id)}));
-    actions.append(button(entry.reflection?'編輯補寫':'補寫：我現在怎麼看？',entry.reflection||entry.released?'soft':'primary',()=>reflectionForm(entry)));
-    actions.append(button('編輯原文','soft',()=>angerForm(entry)));
-    if(!entry.released){
-      const release=button('放生','soft',()=>releaseConfirm(entry.id));
-      release.disabled=!entry.reflection;
-      actions.append(release);
-    }else{
-      actions.append(button('帶回島上','soft',()=>setReleased(entry.id,false)),button('永久刪除','danger',()=>deleteConfirm(entry.id)));
+    if(canEditGroupEntry(entry)){
+      actions.append(button(entry.reflection?'編輯補寫':'補寫：我現在怎麼看？',entry.reflection||entry.released?'soft':'primary',()=>reflectionForm(entry)));
+      actions.append(button('編輯原文','soft',()=>angerForm(entry)));
+      if(!entry.released){
+        const release=button('放生','soft',()=>releaseConfirm(entry.id));
+        release.disabled=!entry.reflection;
+        actions.append(release);
+      }else{
+        actions.append(button('帶回島上','soft',()=>setReleased(entry.id,false)),button('永久刪除','danger',()=>deleteConfirm(entry.id)));
+      }
     }
     actions.append(button(entry.released?'已放生':'生氣紀錄','soft',entry.released?releasedList:angerList));
     wrap.append(actions);
-    if(!entry.released&&!entry.reflection)wrap.append(el('p','先補寫你現在怎麼看這件事，才能放生牠。','sub'));
+    if(canEditGroupEntry(entry)&&!entry.released&&!entry.reflection)wrap.append(el('p','先補寫你現在怎麼看這件事，才能放生牠。','sub'));
     show('生氣紀錄',wrap,'anger-detail');
   }
   function reflectionForm(entry){
@@ -1971,14 +2048,15 @@ const GraceIsland = (() => {
     const actions=el('div',undefined,'actions');actions.append(save,button('取消','soft',()=>angerDetail(entry.id)));
     const original=el('p',entry.body,'entry-body');
     form.append(el('p',entry.date+' 的原文','sub'),original,label,error,actions);
-    form.onsubmit=event=>{
+    sharedFormInfo(form,entry);
+    form.onsubmit=async event=>{
       event.preventDefault();
       const text=body.value.trim();
       if(!text)return showError(error,Error('請寫下你現在的想法。'));
       try{
-        commit(current=>{
+        await commitRecord('anger',current=>{
           const previous=current.anger.find(item=>item.id===entry.id);
-          if(!previous||previous.reflection!==entry.reflection)throw Error('這則紀錄已更新，請重新開啟。');
+          if(!previous||previous.reflection!==entry.reflection||previous.groupRevision!==entry.groupRevision)throw Error('這則紀錄已更新，請重新開啟。');
           return {...current,anger:current.anger.map(item=>item.id===entry.id?{...item,reflection:text,reflectedAt:today()}:item)};
         });
       }catch(problem){return showError(error,problem)}
@@ -1989,17 +2067,18 @@ const GraceIsland = (() => {
     body.focus();
   }
   function releaseConfirm(id){
-    const entry=state.anger.find(item=>item.id===id);
+    const entry=islandState().anger.find(item=>item.id===id);
     if(!entry||!entry.reflection)return angerDetail(id);
     const wrap=el('div'),actions=el('div',undefined,'actions');
-    wrap.append(el('p','放生之後，這隻'+angerSharks[entry.level].name+'會游離島邊，不再出現在海裡。紀錄會移到「已放生」，你仍可重讀、補寫，或把牠帶回島上。','sub'));
+    wrap.append(el('p','放生後，這隻'+angerSharks[entry.level].name+'會移到「已放生」。你仍可重讀、補寫，或把牠帶回島上。'+
+      (entry.groupId?'放生狀態會同步到個人島與小組島。':''),'sub'));
     actions.append(button('放生','primary',()=>setReleased(id,true)),button('取消','soft',()=>angerDetail(id)));
     wrap.append(actions);
     show('放生這隻鯊魚？',wrap,'anger-release');
   }
-  function setReleased(id,released){
+  async function setReleased(id,released){
     try{
-      commit(current=>{
+      await commitRecord('anger',current=>{
         const entry=current.anger.find(item=>item.id===id);
         if(!entry||(released&&!entry.reflection))throw Error('請先補寫，再放生。');
         return {...current,anger:current.anger.map(item=>item.id===id?{...item,released}:item)};
@@ -2009,14 +2088,19 @@ const GraceIsland = (() => {
     if(released)releasedList();else angerDetail(id);
   }
   function deleteConfirm(id){
-    const entry=state.anger.find(item=>item.id===id);
+    const entry=islandState().anger.find(item=>item.id===id);
     if(!entry||!entry.released)return angerDetail(id);
     const wrap=el('div'),actions=el('div',undefined,'actions');
     wrap.append(el('p','這會永久刪除這則生氣紀錄和補寫，無法復原。若之後還想看，請先用「備份」下載 JSON。','sub'));
-    actions.append(button('永久刪除','danger',()=>{
-      try{commit(current=>({...current,anger:current.anger.filter(item=>item.id!==id)}))}catch(problem){notify(problem.message);return}
+    actions.append(button('永久刪除','danger',async()=>{
+      try{await commitRecord('anger',current=>{
+        const latest=current.anger.find(item=>item.id===id);
+        if(!latest?.released||latest.groupRevision!==entry.groupRevision)throw Error('這則紀錄已更新，請重新開啟。');
+        return {...current,anger:current.anger.filter(item=>item.id!==id)};
+      })}catch(problem){notify(problem.message);return}
       notify('紀錄已刪除。');releasedList();
     }),button('取消','soft',()=>angerDetail(id)));
+    if(entry.groupId)wrap.prepend(el('p','這項變更會套用到個人島與小組島。','sub'));
     wrap.append(actions);
     show('永久刪除？',wrap,'anger-delete');
   }
@@ -2029,19 +2113,20 @@ const GraceIsland = (() => {
   }
   function formFor(entry) {
     const form = $('entry-template').content.firstElementChild.cloneNode(true);
+    const id=entry?.id||newId();
     const error = form.querySelector('.error');
     const animalChoice=el('select');
     if(!entry){
       const field=el('label','這篇靈修帶來的新朋友','field');
-      for(const card of unlockedCards(state.total)){
+      for(const card of unlockedCards(islandState().total,!groupIsland)){
         const option=el('option',card.name);option.value=card.id;animalChoice.append(option);
       }
       field.append(animalChoice);
       form.querySelector('.actions').before(field);
     }
     const outfitField=el('label','企鵝造型','field'),outfitChoice=el('select');
-    const allowedOutfits=entry ? outfitsFor(state,entry.id)
-      : GRACE_PREVIEW_UNLOCK_ALL ? Object.keys(PENGUIN_OUTFITS).filter(Boolean) : [];
+    const allowedOutfits=entry ? groupIsland?[]:outfitsFor(state,entry.id)
+      : previewUnlocked() ? Object.keys(PENGUIN_OUTFITS).filter(Boolean) : [];
     if(allowedOutfits.length){
       for(const id of ['',...allowedOutfits]){
         const option=el('option',PENGUIN_OUTFITS[id]);option.value=id;outfitChoice.append(option);
@@ -2059,14 +2144,15 @@ const GraceIsland = (() => {
       }
     }
     for (const field of ['date','title','scripture','body']) form.elements[field].value = entry?.[field] ?? (field === 'date' ? today() : '');
+    sharedFormInfo(form,entry);
     form.querySelector('[data-cancel]').onclick = () => entry ? detail(entry.id) : panel.close();
-    form.onsubmit = event => {
+    form.onsubmit = async event => {
       event.preventDefault();
       const data = Object.fromEntries(Array.from(new FormData(form),([field,value]) => [field,value.trim()]));
       if (!data.body) return showError(error,Error('請寫下一些靈修心得。'));
       let saved;
       try {
-        commit(current => {
+        await commitRecord('journal',current => {
           if (entry) {
             const previous = current.entries.find(item => item.id === entry.id);
             if (!previous) throw Error('這篇日記已被移除，請關閉視窗後重新整理日記。');
@@ -2076,11 +2162,12 @@ const GraceIsland = (() => {
             saved = {...previous,...data,outfit};
             return {...current,entries:current.entries.map(item => item.id === entry.id ? saved : item)};
           }
+          saved=current.entries.find(item=>item.id===id);
+          if(saved)return current;
           const total = current.total + 1;
-          const id = crypto.randomUUID?.() || Array.from(crypto.getRandomValues(new Uint32Array(4)),n => n.toString(16).padStart(8,'0')).join('');
-          const animal=unlockedCards(current.total).find(card=>card.id===animalChoice.value);
+          const animal=unlockedCards(current.total,!groupIsland).find(card=>card.id===animalChoice.value);
           if(!animal)throw Error('這種動物尚未解鎖，請重新開啟表單。');
-          const outfit=GRACE_PREVIEW_UNLOCK_ALL && animal.species==='penguin'
+          const outfit=previewUnlocked() && animal.species==='penguin'
             && Object.hasOwn(PENGUIN_OUTFITS,outfitChoice.value) ? outfitChoice.value : '';
           saved = {id,...data,species:animal.species,variant:animal.variant,outfit};
           const days=[...new Set([...current.progress.days,today()])];
@@ -2089,7 +2176,7 @@ const GraceIsland = (() => {
       } catch (problem) {return showError(error,problem)}
       panel.close();
       if (!entry){stage?.focus(saved.id);stage?.celebrate?.('journal',saved.id);}
-      const unlocked=!GRACE_PREVIEW_UNLOCK_ALL&&!entry&&state.total%3===0 ? unlockOrder[state.total/3] : null;
+      const unlocked=!previewUnlocked()&&!entry&&islandState().total%3===0 ? unlockOrder[islandState().total/3] : null;
       notify(entry ? '靈修已更新。' : nameOf(saved)+'來到島上了！'+(unlocked?' 已解鎖'+cardById.get(unlocked).name+'。':''));
     };
     show(entry ? '編輯靈修' : '寫下今天的靈修',form,entry ? 'edit' : 'new');
@@ -2108,13 +2195,13 @@ const GraceIsland = (() => {
   function journal() {
     const list = el('div',undefined,'rows');
     list.append(button('感恩紀錄','soft',gratitudeList));
-    const sorted = [...state.entries].reverse().sort((a,b) => b.date.localeCompare(a.date));
+    const sorted = [...islandState().entries].reverse().sort((a,b) => b.date.localeCompare(a.date));
     if (!sorted.length) list.append(el('p','寫下第一篇靈修，就能在這裡找到它和對應的動物。','sub'),button('寫靈修','primary',() => formFor()));
     for (const entry of sorted) list.append(row(titleOf(entry),entry.date + ' · ' + nameOf(entry),byId.get(entry.species).color,'',() => detail(entry.id)));
     show('靈修日記',list,'journal');
   }
   function detail(id) {
-    const entry = state.entries.find(item => item.id === id);
+    const entry = islandState().entries.find(item => item.id === id);
     if (!entry) return journal();
     const wrap = el('article');
     wrap.append(el('p',entry.date + ' · ' + nameOf(entry) + ' · ' + byId.get(entry.species).region,'sub'));
@@ -2122,7 +2209,8 @@ const GraceIsland = (() => {
     wrap.append(el('p',entry.body,'entry-body'));
     const actions = el('div',undefined,'actions');
     if (stage) actions.append(button('跟拍','primary',()=>{stage.focus(id,true);panel.close()}));
-    actions.append(button('編輯','soft',() => formFor(entry)),button('刪除','danger',() => remove(entry)),button('所有日記','soft',journal));
+    if(canEditGroupEntry(entry))actions.append(button('編輯','soft',() => formFor(entry)),button('刪除','danger',() => remove(entry)));
+    actions.append(button('所有日記','soft',journal));
     wrap.append(actions);
     show(titleOf(entry),wrap,'detail');
   }
@@ -2130,13 +2218,18 @@ const GraceIsland = (() => {
     const wrap = el('div');
     const error = el('p',undefined,'error');error.setAttribute('role','alert');error.hidden = true;
     const actions = el('div',undefined,'actions');
-    actions.append(button('確認刪除','danger',() => {
-      try {commit(current => ({...current,entries:current.entries.filter(item => item.id !== entry.id)}))}
+    actions.append(button('確認刪除','danger',async() => {
+      try {await commitRecord('journal',current => {
+        const latest=current.entries.find(item=>item.id===entry.id);
+        if(latest?.groupRevision!==entry.groupRevision)throw Error('這篇靈修已更新，請重新開啟。');
+        return {...current,entries:current.entries.filter(item => item.id !== entry.id)};
+      })}
       catch (problem) {return showError(error,problem)}
       journal();
       notify('已刪除靈修與對應的動物。');
     }),button('返回','soft',() => detail(entry.id)));
-    wrap.append(el('p','「' + titleOf(entry) + '」及對應的' + nameOf(entry) + '將一併移除。'),error,actions);
+    wrap.append(el('p','「' + titleOf(entry) + '」及對應的' + nameOf(entry) + '將一併移除。'+
+      (entry.groupId?'這項變更會套用到個人島與小組島。':'')),error,actions);
     show('刪除這篇靈修？',wrap,'remove');
   }
   function guideSection(list,title,description){
@@ -2146,7 +2239,7 @@ const GraceIsland = (() => {
     return section;
   }
   function progressItem(name,color,current,needed,unit,write,openLabel,openAction){
-    const open=GRACE_PREVIEW_UNLOCK_ALL||current>=needed;
+    const open=previewUnlocked()||current>=needed;
     const remaining=Math.max(0,needed-current);
     const status=open ? openLabel : current+'/'+needed+' '+unit+' · 還差 '+remaining+' '+unit;
     const card=row(name,status,color,open?'已開放':'未解鎖',open ? openAction : ()=>{
@@ -2166,10 +2259,10 @@ const GraceIsland = (() => {
   function guide() {
     const list=el('div',undefined,'rows');
     const overview=el('div',undefined,'unlock-overview');
-    const nextAnimal=unlockOrder[unlockedCards(state.total).length];
-    const nextIsland=TERRAIN_MILESTONES.find(area=>area.at>state.total);
-    overview.append(el('strong','養成進度'),el('span','靈修 '+state.total+' 篇 · 感恩 '+state.gratitude.length+' 則'));
-    if(GRACE_PREVIEW_UNLOCK_ALL)overview.append(el('small','全解鎖試玩中'));
+    const nextAnimal=unlockOrder[unlockedCards(islandState().total,!groupIsland).length];
+    const nextIsland=TERRAIN_MILESTONES.find(area=>area.at>islandState().total);
+    overview.append(el('strong','養成進度'),el('span','靈修 '+islandState().total+' 篇 · 感恩 '+islandState().gratitude.length+' 則'));
+    if(previewUnlocked())overview.append(el('small','全解鎖試玩中'));
     else if(nextAnimal||nextIsland){
       const next=[];
       if(nextAnimal)next.push(cardById.get(nextAnimal).name+'（'+unlockOrder.indexOf(nextAnimal)*3+' 篇）');
@@ -2180,21 +2273,38 @@ const GraceIsland = (() => {
     const animals=guideSection(list,'靈修動物','每累積 3 篇靈修開放一種動物，開放後可在新增靈修時選擇。');
     unlockOrder.forEach((id,index)=>{
       const card=cardById.get(id);
-      const residents=state.entries.filter(entry=>entry.species===card.species&&entry.variant===card.variant);
-      animals.append(progressItem(card.name,card.color,state.total,index*3,'篇靈修',()=>formFor(),
+      const residents=islandState().entries.filter(entry=>entry.species===card.species&&entry.variant===card.variant);
+      animals.append(progressItem(card.name,card.color,islandState().total,index*3,'篇靈修',()=>formFor(),
         card.region+' · 島上 '+residents.length+' 隻',()=>residentsFor(card,residents)));
     });
     const islands=guideSection(list,'島嶼地形','累積靈修後，新島會以木橋接到主島。');
     for(const area of TERRAIN_MILESTONES){
-      islands.append(progressItem(area.name,area.color,state.total,area.at,'篇靈修',()=>formFor(),'已連接主島'));
+      islands.append(progressItem(area.name,area.color,islandState().total,area.at,'篇靈修',()=>formFor(),'已連接主島'));
     }
+    if(!groupIsland)appendOutfitGuide(list);
+    const fish=guideSection(list,'感恩之海','感恩獨立計算，每新增一則感恩，可選擇一種已開放的魚。');
+    for(const [id,kind] of Object.entries(gratitudeFishKinds)){
+      const notes=islandState().gratitude.filter(entry=>(entry.fish||'mackerel')===id);
+      fish.append(progressItem(kind.name,kind.color,islandState().gratitude.length,kind.at,'則感恩',()=>gratitudeForm(),
+        '記感恩時可選 · 島上 '+notes.length+' 隻',()=>fishFor(kind,notes)));
+    }
+    list.append(el('h3','深水鯊魚'),el('p','每記下一件生氣的事，就有一隻小鯊魚游進島外的深水。','sub'));
+    for(const [level,kind] of Object.entries(angerSharks)){
+      const notes=islandState().anger.filter(entry=>entry.level===level&&!entry.released);
+      list.append(row(kind.name,kind.label+'時出現',kind.color,notes.length+' 隻',()=>sharksFor(level,notes)));
+    }
+    const freed=islandState().anger.filter(entry=>entry.released).length;
+    list.append(row('已放生','補寫後放生的鯊魚','#c9d6d4',freed+' 隻',releasedList));
+    show('圖鑑與解鎖',list,'guide');
+  }
+  function appendOutfitGuide(list){
     const outfits=guideSection(list,'企鵝造型','連續兩天儲存靈修可得 1 次解鎖機會，之後每多一天再得 1 次。同一天只算一次，每次為指定的一隻企鵝解鎖一款。');
-    const credit=outfitCredit(state.progress);
-    outfits.append(el('strong',GRACE_PREVIEW_UNLOCK_ALL?'試玩中可直接選擇造型':'可用解鎖次數 '+credit));
-    const penguins=state.entries.filter(entry=>entry.species==='penguin');
-    if(!GRACE_PREVIEW_UNLOCK_ALL&&credit&&penguins.some(entry=>outfitsFor(state,entry.id).length<Object.keys(PENGUIN_OUTFITS).length-1)){
+    const credit=outfitCredit(islandState().progress);
+    outfits.append(el('strong',previewUnlocked()?'試玩中可直接選擇造型':'可用解鎖次數 '+credit));
+    const penguins=islandState().entries.filter(entry=>entry.species==='penguin');
+    if(!previewUnlocked()&&credit&&penguins.some(entry=>outfitsFor(state,entry.id).length<Object.keys(PENGUIN_OUTFITS).length-1)){
       outfits.append(button('解鎖企鵝造型','primary',unlockOutfit));
-    }else if(!GRACE_PREVIEW_UNLOCK_ALL&&!penguins.length){
+    }else if(!previewUnlocked()&&!penguins.length){
       outfits.append(button('寫靈修，迎接第一隻企鵝','soft',()=>formFor()));
     }
     const styles={
@@ -2206,22 +2316,8 @@ const GraceIsland = (() => {
     };
     for(const [id,[description,color]] of Object.entries(styles)){
       const owners=penguins.filter(entry=>outfitsFor(state,entry.id).includes(id));
-      outfits.append(row(PENGUIN_OUTFITS[id],description,color,GRACE_PREVIEW_UNLOCK_ALL?'可選':owners.length?owners.length+' 隻已解鎖':'未解鎖'));
+      outfits.append(row(PENGUIN_OUTFITS[id],description,color,previewUnlocked()?'可選':owners.length?owners.length+' 隻已解鎖':'未解鎖'));
     }
-    const fish=guideSection(list,'感恩之海','感恩獨立計算，每新增一則感恩，可選擇一種已開放的魚。');
-    for(const [id,kind] of Object.entries(gratitudeFishKinds)){
-      const notes=state.gratitude.filter(entry=>(entry.fish||'mackerel')===id);
-      fish.append(progressItem(kind.name,kind.color,state.gratitude.length,kind.at,'則感恩',()=>gratitudeForm(),
-        '記感恩時可選 · 島上 '+notes.length+' 隻',()=>fishFor(kind,notes)));
-    }
-    list.append(el('h3','深水鯊魚'),el('p','每記下一件生氣的事，就有一隻小鯊魚游進島外的深水。','sub'));
-    for(const [level,kind] of Object.entries(angerSharks)){
-      const notes=state.anger.filter(entry=>entry.level===level&&!entry.released);
-      list.append(row(kind.name,kind.label+'時出現',kind.color,notes.length+' 隻',()=>sharksFor(level,notes)));
-    }
-    const freed=state.anger.filter(entry=>entry.released).length;
-    list.append(row('已放生','補寫後放生的鯊魚','#c9d6d4',freed+' 隻',releasedList));
-    show('圖鑑與解鎖',list,'guide');
   }
   function unlockOutfit() {
     const available=state.entries.filter(entry=>entry.species==='penguin'&&outfitsFor(state,entry.id).length<Object.keys(PENGUIN_OUTFITS).length-1);
@@ -2279,7 +2375,7 @@ const GraceIsland = (() => {
     const list = el('div',undefined,'rows');
     if(!residents.length){
       const card=animalCards.find(card=>card.name===item.name);
-      const unlocked=card&&unlockedCards(state.total).includes(card);
+      const unlocked=card&&unlockedCards(islandState().total,!groupIsland).includes(card);
       list.append(el('p',unlocked?'寫一篇靈修時，可以選擇'+item.name+'。':'累積 '+unlockOrder.indexOf(card?.id)*3+' 篇靈修後開放。','sub'));
       if(unlocked)list.append(button('寫靈修','primary',()=>formFor()));
     }
@@ -2508,11 +2604,243 @@ const GraceIsland = (() => {
     wrap.append(actions,error);
     show('帳號與同步',wrap,'account');
   }
+  const groupInviteKey='grace-island.group-invite';
+  const groupLoginKey='grace-island.group-login';
+  let pendingInvite='';
+  try{
+    const url=new URL(location.href);
+    if(url.hash.startsWith('#groupInvite=')){
+      const token=url.hash.slice('#groupInvite='.length);
+      pendingInvite=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(token)?token:'';
+      if(pendingInvite)sessionStorage.setItem(groupInviteKey,pendingInvite);
+      else sessionStorage.removeItem(groupInviteKey);
+      url.hash='';
+      history.replaceState(history.state,'',url);
+    }else pendingInvite=sessionStorage.getItem(groupInviteKey)||'';
+  }catch{}
+  function clearGroupInvite(){
+    pendingInvite='';
+    try{sessionStorage.removeItem(groupInviteKey)}catch{}
+  }
+  function groupMessage(problem){
+    if(problem.code==='22023')return '這個邀請連結已失效，請向組長索取新連結。';
+    if(['PGRST202','PGRST205','42P01'].includes(problem.code))return '小組島尚未在伺服器啟用，請聯絡網站管理員。';
+    if(problem.code==='42501')return '目前帳號沒有操作權限，請確認已用正確的 Google 帳號登入。';
+    return '暫時無法連上小組島，請稍後再試。';
+  }
+  async function groupRequest(request){
+    const db=await CloudConnection.get();
+    const {data,error}=await request(db);
+    if(error)throw error;
+    return data;
+  }
+  const journalLists={journal:'entries',gratitude:'gratitude',anger:'anger'};
+  let recordWriting=false, groupTimer, groupNavigation=0;
+  function canEditGroupEntry(entry){
+    return !groupIsland||groupIsland.authors.get(entry.id)===privateJournal.status.user?.id;
+  }
+  function sharedFormInfo(form,entry){
+    if(groupIsland||entry?.groupId)form.prepend(el('p',entry?
+      '變更會同步到個人島與小組島。小組成員可查看全文。':
+      '小組成員可查看全文。這篇紀錄也會加入你的個人島。','sub'));
+  }
+  function groupSnapshot(islandId,data){
+    const raw=empty(), authors=new Map();
+    raw.total=data.total;
+    for(const {author,kind,entry,revision} of data.notes){
+      authors.set(entry.id,author);
+      raw[journalLists[kind]].push({...entry,groupId:islandId,groupRevision:revision});
+    }
+    return {snapshot:decode(raw),authors};
+  }
+  function readGroup(island){
+    return groupRequest(db=>db.rpc('grace_read_group_journals',{target_island:island.id}))
+      .then(data=>groupSnapshot(island.id,data));
+  }
+  async function renewGroup(group){
+    const request=++group.request;
+    const latest=await readGroup(group);
+    if(groupIsland!==group||request!==group.request)return;
+    const changed=JSON.stringify(latest.snapshot)!==JSON.stringify(group.snapshot);
+    Object.assign(group,latest);
+    if(changed){
+      refresh();
+      if(panel.open){
+        if(route==='journal')journal();
+        if(route==='gratitude-list')gratitudeList();
+        if(route==='anger-list')angerList();
+        if(route==='anger-released')releasedList();
+        if(route==='guide')guide();
+      }
+    }
+  }
+  function refreshActiveGroup(){
+    const group=groupIsland;
+    if(!group||document.hidden||recordWriting||group.loading)return;
+    group.loading=true;
+    void renewGroup(group).catch(()=>{}).finally(()=>{group.loading=false});
+  }
+  function setGroupMode(group){
+    clearInterval(groupTimer);
+    groupNavigation++;
+    groupIsland=group;
+    $('island-title').textContent=group?.name||'恩典之島';
+    $('island-mode').textContent=group?'教會小組島':'Grace Island';
+    $('shared-islands').hidden=Boolean(group);
+    $('backup').hidden=Boolean(group);
+    if(group){
+      Archipelago.disconnect();
+      groupTimer=setInterval(refreshActiveGroup,5000);
+    }
+    refresh();
+    stage?.reset?.();
+  }
+  async function openGroupIsland(island){
+    if(recordWriting)throw Error('請等待這篇共用紀錄儲存完成。');
+    const request=++groupNavigation, user=privateJournal.status.user?.id;
+    const latest=await readGroup(island);
+    if(request!==groupNavigation||user!==privateJournal.status.user?.id||!panel.open||route!=='group-lobby')return;
+    setGroupMode({...island,...latest,request:0});
+    panel.close();
+    notify('已進入 '+island.name+'。');
+  }
+  async function commitRecord(kind,change){
+    if(recordWriting)throw Error('請等上一筆共用紀錄儲存完成。');
+    const group=groupIsland, before=group?.snapshot??read(), after=decode(change(before));
+    const collection=journalLists[kind];
+    const original=new Map(before[collection].map(entry=>[entry.id,entry]));
+    const updated=new Map(after[collection].map(entry=>[entry.id,entry]));
+    const ids=new Set([...original.keys(),...updated.keys()]);
+    const id=[...ids].find(id=>JSON.stringify(original.get(id))!==JSON.stringify(updated.get(id)));
+    if(!id)return;
+    const previous=original.get(id), next=updated.get(id);
+    const target=group?.id||previous?.groupId;
+    if(!target){commit(()=>after);return}
+    if(previous&&!canEditGroupEntry(previous))throw Error('只有作者可以修改這篇共用紀錄。');
+    recordWriting=true;
+    if(group)group.request++;
+    try{
+      const saved=await privateJournal.linkedWrite(revision=>groupRequest(db=>db.rpc('grace_write_group_journal',{
+        target_island:target,note_id:id,note_kind:kind,new_entry:next??null,
+        expected_note:previous?.groupRevision??0,expected_private:revision,saved_day:today(),personal_outfit:!group
+      })));
+      if(!saved)throw Error('登入帳號已切換。請回到原帳號查看儲存結果。');
+      if(group&&groupIsland===group){
+        try{await renewGroup(group)}
+        catch{notify('紀錄已儲存，正在等小組島重新載入。')}
+      }
+    }catch(problem){
+      if(group&&groupIsland===group)void renewGroup(group).catch(()=>{});
+      if(problem.code==='40001')throw Error('另一台裝置更新了紀錄，請關閉表單後重新開啟再試。');
+      if(problem.code==='22023')throw Error('紀錄內容或動物解鎖狀態有變，請重新開啟表單。');
+      if(problem.code==='42501')throw Error('目前的帳號無法修改這篇小組紀錄。');
+      if(problem.code)throw Error(groupMessage(problem));
+      throw problem;
+    }finally{recordWriting=false}
+  }
+  function groupLobby(){
+    const wrap=el('div'), status=el('p','','sub group-status');
+    status.setAttribute('role','status');
+    show('小組島',wrap,'group-lobby');
+    if(location.protocol==='file:'||!CloudConnection.configured()){
+      wrap.append(el('p','請從已設定雲端服務的正式網站開啟小組島。','sub'));
+      return;
+    }
+    wrap.append(el('p','與教會小組寫下靈修、感恩與生氣紀錄，一起養成同一座島。','sub'));
+    if(groupIsland){
+      const current=groupIsland;
+      const tools=el('div',undefined,'group-tools');
+      tools.append(button('回個人島','soft',()=>{
+        if(recordWriting)status.textContent='請等待這篇共用紀錄儲存完成。';
+        else{setGroupMode(undefined);panel.close()}
+      }));
+      if(current.owner_id===privateJournal.status.user?.id){
+        const linkBox=el('div');
+        tools.append(button('產生邀請連結','soft',event=>action(event.currentTarget,async()=>{
+          const token=await groupRequest(db=>db.rpc('grace_make_group_invite',{target_island:current.id}));
+          const url=new URL(location.origin+location.pathname.replace(/\/index\.html$/,'/'));
+          url.hash='groupInvite='+token;
+          const label=el('label','邀請連結（7 天內有效）','field'), input=el('input');
+          input.value=url.href;input.readOnly=true;label.append(input);
+          linkBox.replaceChildren(label,button('複製連結','soft',async()=>{
+            try{await navigator.clipboard.writeText(url.href);status.textContent='已複製邀請連結。'}
+            catch{input.focus();input.select()}
+          }));
+        })));
+        wrap.append(tools,linkBox);
+      }else wrap.append(tools);
+    }
+    function action(control,run){
+      control.disabled=true;
+      status.textContent='';
+      void (async()=>{
+        try{await run()}
+        catch(problem){status.textContent=groupMessage(problem)}
+        finally{control.disabled=false}
+      })();
+    }
+    if(!privateJournal.active){
+      wrap.append(button(pendingInvite?'登入後接受邀請':'使用 Google 登入','primary',
+        event=>action(event.currentTarget,async()=>{
+          sessionStorage.setItem(groupLoginKey,'1');
+          try{await privateJournal.authorize()}
+          catch(problem){sessionStorage.removeItem(groupLoginKey);throw problem}
+        })),status);
+      return;
+    }
+    const list=el('div',undefined,'group-list');
+    const readIslands=()=>groupRequest(db=>db.from('grace_group_islands').select('id,name,owner_id').order('name'));
+    async function openById(id){
+      const island=await groupRequest(db=>db.from('grace_group_islands').select('id,name,owner_id').eq('id',id).single());
+      if(panel.open&&wrap.isConnected)await openGroupIsland(island);
+    }
+    if(pendingInvite){
+      const token=pendingInvite;
+      const actions=el('div',undefined,'group-tools');
+      actions.append(button('接受小組島邀請','primary',event=>action(event.currentTarget,async()=>{
+        const id=await groupRequest(db=>db.rpc('grace_join_group_island',{invite_token:token}));
+        clearGroupInvite();
+        await openById(id);
+        if(panel.open&&wrap.isConnected)groupLobby();
+      })),button('略過','soft',()=>{clearGroupInvite();groupLobby()}));
+      wrap.append(actions);
+    }
+    wrap.append(el('h3','我的小組島'),list);
+    const form=el('form'),label=el('label','新小組島名稱','field'),name=el('input');
+    name.required=true;name.maxLength=40;name.placeholder='例如：晨光小組';
+    const submit=el('button','建立小組島','primary');submit.type='submit';
+    label.append(name);
+    form.append(label,submit);
+    form.onsubmit=event=>{
+      event.preventDefault();
+      const islandName=name.value.trim();
+      if(!islandName){status.textContent='請輸入小組島名稱。';name.focus();return}
+      action(submit,async()=>{
+        const id=await groupRequest(db=>db.rpc('grace_create_group_island',{island_name:islandName}));
+        name.value='';
+        await openById(id);
+      });
+    };
+    wrap.append(form,status);
+    async function load(){
+      list.textContent='載入中…';
+      try{
+        const islands=await readIslands();
+        list.replaceChildren(...islands.map(island=>button(island.name,'soft',
+          event=>action(event.currentTarget,()=>openGroupIsland(island)))));
+        if(!islands.length)list.append(el('p','還沒有小組島。你可以建立一座，或開啟組長傳給你的邀請連結。','sub'));
+      }catch(problem){
+        list.replaceChildren(el('p',groupMessage(problem),'sub'),button('重新載入','soft',load));
+      }
+    }
+    void load();
+  }
   const privateJournal=createPrivateJournal({
     empty,decode,readGuest,
     onAccount(data){
       Archipelago.disconnect();
       state=data;
+      if(groupIsland)setGroupMode(undefined);
       if(panel.open&&route!=='account')panel.close();
       refresh();
     },
@@ -2531,6 +2859,7 @@ const GraceIsland = (() => {
     }
   });
   $('cloud-account').onclick=()=>{accountError='';cloudAccount()};
+  $('group-islands').onclick=groupLobby;
   $('new-entry').onclick = () => formFor();
   $('new-gratitude').onclick = () => gratitudeForm();
   $('new-anger').onclick = () => angerForm();
@@ -2540,6 +2869,8 @@ const GraceIsland = (() => {
   $('close-panel').onclick = () => panel.close();
   panel.addEventListener('close',() => {if(!panel.open)stage?.closePreview()});
   panel.addEventListener('click',event => {if (event.target === panel) panel.close()});
+  document.addEventListener('visibilitychange',refreshActiveGroup);
+  window.addEventListener('online',refreshActiveGroup);
   window.addEventListener('storage',event => {
     if (event.key !== (privateJournal.storageKey||key) && event.key !== null) return;
     try {
@@ -2561,8 +2892,11 @@ const GraceIsland = (() => {
       if(sessionStorage.getItem('grace-island.google-return')==='1'){
         sessionStorage.removeItem('grace-island.google-return');
         if(!privateJournal.active)accountError='Google 登入未完成，請再試一次。';
-        cloudAccount();
-      }
+        const fromGroup=sessionStorage.getItem(groupLoginKey)==='1';
+        sessionStorage.removeItem(groupLoginKey);
+        if(pendingInvite||(fromGroup&&privateJournal.active))groupLobby();
+        else cloudAccount();
+      }else if(pendingInvite)groupLobby();
     }).catch(()=>notify('暫時無法連上帳號服務。'));
     window.addEventListener('online',privateJournal.sync);
     document.addEventListener('visibilitychange',()=>{if(!document.hidden)void privateJournal.sync()});
@@ -2573,7 +2907,7 @@ const GraceIsland = (() => {
     connect(api) {stage = api;refresh()},
     open:detail,
     openGratitude(id){
-      if(state.anger.some(entry=>entry.id===id&&!entry.released))angerDetail(id);
+      if(islandState().anger.some(entry=>entry.id===id&&!entry.released))angerDetail(id);
       else gratitudeDetail(id);
     },
     unavailable() {
@@ -5472,7 +5806,7 @@ Archipelago.bind({show:showNeighbors,overview:archipelagoOverview});
 function syncResidents(state){
   syncGratitudeFish(state.gratitude||[]);
   AngerSharks.sync(state.anger||[]);
-  rebuildTerrain(GRACE_PREVIEW_UNLOCK_ALL ? Infinity : state.total);
+  rebuildTerrain(GRACE_PREVIEW_UNLOCK_ALL&&!state.sharedGroup ? Infinity : state.total);
   const newlyOpened=territoryScenery.filter((islet,index)=>!islet.group.visible&&terrainTotal>=TERRITORIES[index].at);
   territoryScenery.forEach((islet,index)=>{islet.group.visible=terrainTotal>=TERRITORIES[index].at});
   const wanted=new Map(state.entries.map(entry=>[entry.id,entry]));
@@ -5941,7 +6275,7 @@ function tick(){
   if(c.y!==renderedCameraHeight)camera.lookAt(controls.target);
   requestAnimationFrame(tick);
 }
-GraceIsland.connect({sync:syncResidents,focus:focusResident,focusGratitude,closePreview,celebrate});
+GraceIsland.connect({sync:syncResidents,focus:focusResident,focusGratitude,closePreview,celebrate,reset:resetView});
 tick();
 } catch (error) {
   console.error(error);
