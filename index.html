@@ -1474,10 +1474,12 @@ function createPrivateJournal({empty,decode,readGuest,onAccount,onData,onStatus}
     if(localDelta&&remoteDelta&&!addedDevotions(local)&&!addedDevotions(remote))return null;
     data.total=Math.max(data.entries.length,base.data.total+localDelta+remoteDelta-duplicateDevotions);
     const a=local.data.progress,b=remote.data.progress,prior=base.data.progress;
-    if(!same(a.outfits,prior.outfits)&&!same(b.outfits,prior.outfits)&&!same(a.outfits,b.outfits))return null;
+    const wardrobe=progress=>[progress.outfits,progress.unlockedOutfits];
+    if(!same(wardrobe(a),wardrobe(prior))&&!same(wardrobe(b),wardrobe(prior))&&!same(wardrobe(a),wardrobe(b)))return null;
+    const outfits=same(wardrobe(a),wardrobe(prior))?b:a;
     data.progress={
       days:[...new Set([...a.days,...b.days])].sort(),
-      outfits:same(a.outfits,prior.outfits)?b.outfits:a.outfits
+      outfits:outfits.outfits,unlockedOutfits:outfits.unlockedOutfits
     };
     return {data:decode(data),times:Object.fromEntries(times)};
   }
@@ -1698,7 +1700,8 @@ const GraceIsland = (() => {
     very:{label:'非常生氣',name:'雙髻鯊',color:'#5f6d6a',notice:'一隻雙髻鯊游進島外的深水。'}
   };
   const fishOf = entry => gratitudeFishKinds[entry.fish] || gratitudeFishKinds.mackerel;
-  const unlockOrder=['adelie','seal','emperor','bear','rockhopper','dolphin','chick','whale','orca','beluga','narwhal','magellanic'];
+  const unlockOrder=['adelie','chick','emperor','seal','rockhopper','dolphin','bear','whale','orca','beluga','narwhal','magellanic'];
+  const cappedSpecies=new Set(['seal','bear']);
   const $ = id => document.getElementById(id);
   const panel = $('panel'), content = $('panel-content');
   const sidebar = $('mobile-sidebar'), menuButton = $('mobile-menu');
@@ -1749,7 +1752,7 @@ const GraceIsland = (() => {
     viewport.addEventListener('scroll',fitDialog);
     fitDialog();
   }
-  const empty = () => ({version:1,total:0,entries:[],gratitude:[],anger:[],progress:{days:[],outfits:[]}});
+  const empty = () => ({version:1,total:0,entries:[],gratitude:[],anger:[],progress:{days:[],outfits:[],unlockedOutfits:[]}});
   let state = empty(), stage, noticeTimer, route, routeNoteId, groupIsland;
 
   function validDate(date) {
@@ -1770,7 +1773,7 @@ const GraceIsland = (() => {
           (entry.species === 'penguin' ? !Object.hasOwn(variants,entry.variant) : entry.variant !== '')) throw Error('備份內有不完整的日記、重複的編號或無效的動物資料。');
       ids.add(entry.id);
       const {id,date,title,scripture,body,species,variant} = entry;
-      return {id,date,title,scripture,body,species,variant,outfit,...noteLink(entry)};
+      return {id,date,title,scripture,body,species,variant,outfit,...creationTime(entry),...noteLink(entry)};
     });
     const progress=decodeProgress(value.progress,entries);
     const gratitude=value.gratitude===undefined?[]:value.gratitude;
@@ -1780,7 +1783,7 @@ const GraceIsland = (() => {
       if(!entry||!isText(entry.id,100)||!entry.id||ids.has(entry.id)||!validDate(entry.date)||
         !isText(entry.body,12000)||!entry.body.trim()||typeof fish!=='string'||!Object.hasOwn(gratitudeFishKinds,fish))throw Error('備份內有無效或重複的感恩紀錄。');
       ids.add(entry.id);
-      return {id:entry.id,date:entry.date,body:entry.body,fish,...noteLink(entry)};
+      return {id:entry.id,date:entry.date,body:entry.body,fish,...creationTime(entry),...noteLink(entry)};
     });
     const anger=value.anger===undefined?[]:value.anger;
     if(!Array.isArray(anger))throw Error('備份內的生氣紀錄格式不正確。');
@@ -1790,9 +1793,13 @@ const GraceIsland = (() => {
         typeof entry.level!=='string'||!Object.hasOwn(angerSharks,entry.level)||!isText(reflection,12000)||(reflectedAt!==''&&!validDate(reflectedAt))||
         (entry.released!==undefined&&typeof entry.released!=='boolean')||(entry.released===true&&!reflection.trim()))throw Error('備份內有無效或重複的生氣紀錄。');
       ids.add(entry.id);
-      return {id:entry.id,date:entry.date,body:entry.body,level:entry.level,reflection,reflectedAt,released:entry.released===true,...noteLink(entry)};
+      return {id:entry.id,date:entry.date,body:entry.body,level:entry.level,reflection,reflectedAt,released:entry.released===true,...creationTime(entry),...noteLink(entry)};
     });
     return {version:1,total:value.total,entries,gratitude:gratitudeEntries,anger:angerEntries,progress};
+  }
+  function creationTime(entry){
+    return Number.isSafeInteger(entry.bornAt)&&entry.bornAt>0&&entry.bornAt<=8640000000000000
+      ? {bornAt:entry.bornAt} : {};
   }
   function noteLink(entry){
     if(!entry.groupId)return {};
@@ -1804,12 +1811,16 @@ const GraceIsland = (() => {
   const previewUnlocked=()=>GRACE_PREVIEW_UNLOCK_ALL&&!groupIsland;
   function decodeProgress(progress,entries) {
     if(progress===undefined)return {
-      days:[],outfits:entries.filter(entry=>entry.outfit).map(entry=>({target:entry.id,outfit:entry.outfit,legacy:true}))
+      days:[],outfits:entries.filter(entry=>entry.outfit).map(entry=>({target:entry.id,outfit:entry.outfit,legacy:true})),unlockedOutfits:[]
     };
     if(!progress||!Array.isArray(progress.days)||!Array.isArray(progress.outfits)){
       throw Error('備份內的圖鑑或造型進度不完整。');
     }
     const days=[...new Set(progress.days)].sort();
+    const unlocked=progress.unlockedOutfits??[];
+    if(!Array.isArray(unlocked)||unlocked.some(id=>typeof id!=='string'||!id||!Object.hasOwn(PENGUIN_OUTFITS,id))){
+      throw Error('備份內有無效的造型解鎖記錄。');
+    }
     const outfits=progress.outfits.map(grant=>{
       if(!grant||typeof grant.target!=='string'||!grant.target||grant.target.length>100||
         !grant.outfit||!Object.hasOwn(PENGUIN_OUTFITS,grant.outfit))throw Error('備份內有無效的造型解鎖記錄。');
@@ -1819,7 +1830,7 @@ const GraceIsland = (() => {
       new Set(outfits.map(grant=>JSON.stringify([grant.target,grant.outfit]))).size!==outfits.length){
       throw Error('備份內有無效或重複的解鎖記錄。');
     }
-    return {days,outfits};
+    return {days,outfits,unlockedOutfits:[...new Set(unlocked)]};
   }
   function unlockedCards(total, allowPreview=true) {
     const count=GRACE_PREVIEW_UNLOCK_ALL&&allowPreview ? unlockOrder.length : 1+Math.floor(total/3);
@@ -1828,13 +1839,14 @@ const GraceIsland = (() => {
   function outfitCredit(progress) {
     const days=progress.days;
     const earned=days.filter((day,index)=>index>0&&Date.parse(day)-Date.parse(days[index-1])===86400000).length;
-    return Math.max(0,earned-progress.outfits.filter(grant=>!grant.legacy).length);
+    return Math.max(0,earned-progress.outfits.filter(grant=>!grant.legacy).length-(progress.unlockedOutfits?.length||0));
   }
-  function outfitsFor(state,id) {
-    if(GRACE_PREVIEW_UNLOCK_ALL && state.entries.some(entry=>entry.id===id&&entry.species==='penguin')){
-      return Object.keys(PENGUIN_OUTFITS).filter(Boolean);
-    }
-    return state.progress.outfits.filter(grant=>grant.target===id).map(grant=>grant.outfit);
+  function unlockedOutfits(progress,preview=false) {
+    if(preview)return Object.keys(PENGUIN_OUTFITS).filter(Boolean);
+    return [...new Set([...progress.outfits.map(grant=>grant.outfit),...(progress.unlockedOutfits||[])])];
+  }
+  function speciesFull(card,data,shared=false) {
+    return !shared&&cappedSpecies.has(card.species)&&data.entries.filter(entry=>entry.species===card.species).length>=3;
   }
   function readGuest() {
     const saved = localStorage.getItem(key);
@@ -1854,7 +1866,9 @@ const GraceIsland = (() => {
     return [date.getFullYear(),date.getMonth()+1,date.getDate()].map((n,i) => String(n).padStart(i ? 2 : 4,'0')).join('-');
   }
   function syncStage(){
-    stage?.sync(groupIsland ? {...groupIsland.snapshot,sharedGroup:true} : state);
+    if(!stage)return;
+    if(groupIsland)stage.sync({...groupIsland.snapshot,sharedGroup:true,arrivalScope:groupIsland.id});
+    else stage.sync({...state,personalIsland:true,arrivalScope:privateJournal.status.user?.id??'guest'});
   }
   function refresh() {
     const {entries,total} = groupIsland?.snapshot ?? state;
@@ -1964,7 +1978,7 @@ const GraceIsland = (() => {
           if(saved)return current;
           const fish=fishChoice.value||'mackerel',kind=gratitudeFishKinds[fish];
           if(!kind||(!previewUnlocked()&&current.gratitude.length<kind.at))throw Error('這種魚還沒有解鎖，請重新選擇。');
-          saved={id,date:today(),body:text,fish};
+          saved={id,date:today(),body:text,fish,bornAt:Date.now()};
           return {...current,gratitude:[...current.gratitude,saved]};
         });
       }catch(problem){return showError(error,problem)}
@@ -2062,7 +2076,7 @@ const GraceIsland = (() => {
           if(saved)return current;
           const level=levelChoice.value;
           if(!Object.hasOwn(angerSharks,level))throw Error('請選擇生氣程度。');
-          saved={id,date:today(),body:text,level,reflection:'',reflectedAt:'',released:false};
+          saved={id,date:today(),body:text,level,reflection:'',reflectedAt:'',released:false,bornAt:Date.now()};
           return {...current,anger:[...current.anger,saved]};
         });
       }catch(problem){return showError(error,problem)}
@@ -2203,30 +2217,29 @@ const GraceIsland = (() => {
     const animalChoice=el('select');
     if(!entry){
       const field=el('label','這篇靈修帶來的新朋友','field');
-      for(const card of unlockedCards(islandState().total,!groupIsland)){
-        const option=el('option',card.name);option.value=card.id;animalChoice.append(option);
+      const island=islandState();
+      for(const card of unlockedCards(island.total,!groupIsland)){
+        const full=speciesFull(card,island,Boolean(groupIsland));
+        const option=el('option',card.name+(full?'（已達 3 隻上限）':''));
+        option.value=card.id;option.disabled=full;animalChoice.append(option);
       }
       field.append(animalChoice);
       form.querySelector('.actions').before(field);
     }
     const outfitField=el('label','企鵝造型','field'),outfitChoice=el('select');
-    const allowedOutfits=entry ? groupIsland?[]:outfitsFor(state,entry.id)
-      : previewUnlocked() ? Object.keys(PENGUIN_OUTFITS).filter(Boolean) : [];
+    const allowedOutfits=entry?[]:unlockedOutfits(state.progress,previewUnlocked());
     if(allowedOutfits.length){
       for(const id of ['',...allowedOutfits]){
         const option=el('option',PENGUIN_OUTFITS[id]);option.value=id;outfitChoice.append(option);
       }
-      outfitChoice.value=entry?.outfit || '';
       outfitField.append(outfitChoice);
       form.querySelector('.actions').before(outfitField);
-      if(!entry){
-        const updateOutfitField=()=>{
-          outfitChoice.disabled=cardById.get(animalChoice.value)?.species!=='penguin';
-          outfitField.style.display=outfitChoice.disabled?'none':'';
-        };
-        animalChoice.onchange=updateOutfitField;
-        updateOutfitField();
-      }
+      const updateOutfitField=()=>{
+        outfitChoice.disabled=cardById.get(animalChoice.value)?.species!=='penguin';
+        outfitField.style.display=outfitChoice.disabled?'none':'';
+      };
+      animalChoice.onchange=updateOutfitField;
+      updateOutfitField();
     }
     for (const field of ['date','title','scripture','body']) form.elements[field].value = entry?.[field] ?? (field === 'date' ? today() : '');
     sharedFormInfo(form,entry);
@@ -2242,9 +2255,7 @@ const GraceIsland = (() => {
             const previous = current.entries.find(item => item.id === entry.id);
             if (!previous) throw Error('這篇日記已被移除，請關閉視窗後重新整理日記。');
             if (JSON.stringify(previous) !== JSON.stringify(entry)) throw Error('這篇日記已在另一個視窗更新，請重新開啟再編輯。');
-            const outfit=allowedOutfits.length?outfitChoice.value:previous.outfit;
-            if(outfit&&outfit!==previous.outfit&&!outfitsFor(current,previous.id).includes(outfit))throw Error('這隻企鵝尚未解鎖此造型。');
-            saved = {...previous,...data,outfit};
+            saved = {...previous,...data};
             return {...current,entries:current.entries.map(item => item.id === entry.id ? saved : item)};
           }
           saved=current.entries.find(item=>item.id===id);
@@ -2252,15 +2263,17 @@ const GraceIsland = (() => {
           const total = current.total + 1;
           const animal=unlockedCards(current.total,!groupIsland).find(card=>card.id===animalChoice.value);
           if(!animal)throw Error('這種動物尚未解鎖，請重新開啟表單。');
-          const outfit=previewUnlocked() && animal.species==='penguin'
-            && Object.hasOwn(PENGUIN_OUTFITS,outfitChoice.value) ? outfitChoice.value : '';
-          saved = {id,...data,species:animal.species,variant:animal.variant,outfit};
+          if(speciesFull(animal,current,Boolean(groupIsland)))throw Error(animal.name+'已達個人島的 3 隻上限，請選擇其他動物。');
+          const outfit=animal.species==='penguin'?outfitChoice.value:'';
+          const personalProgress=groupIsland?state.progress:current.progress;
+          if(outfit&&!unlockedOutfits(personalProgress,previewUnlocked()).includes(outfit))throw Error('這款造型尚未解鎖。');
+          saved = {id,...data,species:animal.species,variant:animal.variant,outfit,bornAt:Date.now()};
           const days=[...new Set([...current.progress.days,today()])];
           return {...current,total,entries:[...current.entries,saved],progress:{...current.progress,days}};
         });
       } catch (problem) {return showError(error,problem)}
       panel.close();
-      if (!entry){stage?.focus(saved.id);stage?.celebrate?.('journal',saved.id);}
+      if (!entry){stage?.welcome?.(saved.id);stage?.celebrate?.('journal',saved.id);}
       const unlocked=!previewUnlocked()&&!entry&&islandState().total%3===0 ? unlockOrder[islandState().total/3] : null;
       notify(entry ? '靈修已更新。' : nameOf(saved)+'來到島上了！'+(unlocked?' 已解鎖'+cardById.get(unlocked).name+'。':''));
     };
@@ -2366,7 +2379,7 @@ const GraceIsland = (() => {
     for(const area of TERRAIN_MILESTONES){
       islands.append(progressItem(area.name,area.color,islandState().total,area.at,'篇靈修',()=>formFor(),'已連接主島'));
     }
-    if(!groupIsland)appendOutfitGuide(list);
+    appendOutfitGuide(list);
     const fish=guideSection(list,'感恩之海','感恩獨立計算，每新增一則感恩，可選擇一種已開放的魚。');
     for(const [id,kind] of Object.entries(gratitudeFishKinds)){
       const notes=islandState().gratitude.filter(entry=>(entry.fish||'mackerel')===id);
@@ -2383,14 +2396,12 @@ const GraceIsland = (() => {
     show('圖鑑與解鎖',list,'guide');
   }
   function appendOutfitGuide(list){
-    const outfits=guideSection(list,'企鵝造型','連續兩天儲存靈修可得 1 次解鎖機會，之後每多一天再得 1 次。同一天只算一次，每次為指定的一隻企鵝解鎖一款。');
-    const credit=outfitCredit(islandState().progress);
+    const outfits=guideSection(list,'我的企鵝造型','連續兩天儲存靈修可得 1 次解鎖機會，之後每多一天再得 1 次。同一天只算一次。每次解鎖一款，所有種類的新企鵝都可選用。');
+    const progress=state.progress,credit=outfitCredit(progress);
+    const unlocked=unlockedOutfits(progress,previewUnlocked());
     outfits.append(el('strong',previewUnlocked()?'試玩中可直接選擇造型':'可用解鎖次數 '+credit));
-    const penguins=islandState().entries.filter(entry=>entry.species==='penguin');
-    if(!previewUnlocked()&&credit&&penguins.some(entry=>outfitsFor(state,entry.id).length<Object.keys(PENGUIN_OUTFITS).length-1)){
+    if(!previewUnlocked()&&credit&&unlocked.length<Object.keys(PENGUIN_OUTFITS).length-1){
       outfits.append(button('解鎖企鵝造型','primary',unlockOutfit));
-    }else if(!previewUnlocked()&&!penguins.length){
-      outfits.append(button('寫靈修，迎接第一隻企鵝','soft',()=>formFor()));
     }
     const styles={
       pastor:['牧師領與長袍','#657881'],warrior:['護甲與戰士裝備','#aa895b'],
@@ -2400,49 +2411,37 @@ const GraceIsland = (() => {
       evangelist:['旅行袍與打開的聖經','#688d74']
     };
     for(const [id,[description,color]] of Object.entries(styles)){
-      const owners=penguins.filter(entry=>outfitsFor(state,entry.id).includes(id));
-      outfits.append(row(PENGUIN_OUTFITS[id],description,color,previewUnlocked()?'可選':owners.length?owners.length+' 隻已解鎖':'未解鎖'));
+      outfits.append(row(PENGUIN_OUTFITS[id],description,color,unlocked.includes(id)?'新企鵝可選':'未解鎖'));
     }
   }
   function unlockOutfit() {
-    const available=state.entries.filter(entry=>entry.species==='penguin'&&outfitsFor(state,entry.id).length<Object.keys(PENGUIN_OUTFITS).length-1);
+    const owned=unlockedOutfits(state.progress);
+    const available=Object.entries(PENGUIN_OUTFITS).filter(([id])=>id&&!owned.includes(id));
     const form=el('form'),error=el('p',undefined,'error');
     error.setAttribute('role','alert');
     if(!available.length){
-      form.append(el('p','目前沒有可解鎖新造型的企鵝。','sub'),button('返回圖鑑','soft',guide));
+      form.append(el('p','所有企鵝造型已解鎖。','sub'),button('返回圖鑑','soft',guide));
       show('解鎖企鵝造型',form,'outfit');return;
     }
-    const penguinLabel=el('label','指定一隻企鵝','field'),penguin=el('select');
     const outfitLabel=el('label','選擇一款造型','field'),outfit=el('select');
-    for(const entry of available){
-      const option=el('option',nameOf(entry)+' · '+titleOf(entry)+' · '+entry.date);option.value=entry.id;penguin.append(option);
+    for(const [id,label] of available){
+      const option=el('option',label);option.value=id;outfit.append(option);
     }
-    function updateOutfits(){
-      outfit.replaceChildren();
-      const owned=outfitsFor(state,penguin.value);
-      for(const [id,label] of Object.entries(PENGUIN_OUTFITS)){
-        if(!id||owned.includes(id))continue;
-        const option=el('option',label);option.value=id;outfit.append(option);
-      }
-    }
-    penguin.onchange=updateOutfits;updateOutfits();
-    penguinLabel.append(penguin);outfitLabel.append(outfit);
-    const submit=el('button','解鎖並穿上','primary');submit.type='submit';
+    outfitLabel.append(outfit);
+    const submit=el('button','解鎖造型','primary');submit.type='submit';
     const actions=el('div',undefined,'actions');actions.append(submit,button('返回圖鑑','soft',guide));
-    form.append(penguinLabel,outfitLabel,error,actions);
+    form.append(outfitLabel,el('p','解鎖後，新增靈修時可以為新企鵝選用這款造型。','sub'),error,actions);
     form.onsubmit=event=>{
       event.preventDefault();
-      const target=penguin.value,choice=outfit.value;
+      const choice=outfit.value;
       try{
         commit(current=>{
-          const entry=current.entries.find(item=>item.id===target&&item.species==='penguin');
-          if(!entry||!choice||!Object.hasOwn(PENGUIN_OUTFITS,choice)||outfitsFor(current,target).includes(choice))throw Error('這個造型無法解鎖，請重新選擇。');
+          if(!choice||!Object.hasOwn(PENGUIN_OUTFITS,choice)||unlockedOutfits(current.progress).includes(choice))throw Error('這個造型無法解鎖，請重新選擇。');
           if(!outfitCredit(current.progress))throw Error('目前沒有可用的造型解鎖次數。');
-          return {...current,entries:current.entries.map(item=>item.id===target?{...item,outfit:choice}:item),
-            progress:{...current.progress,outfits:[...current.progress.outfits,{target,outfit:choice}]}};
+          return {...current,progress:{...current.progress,unlockedOutfits:[...current.progress.unlockedOutfits,choice]}};
         });
       }catch(problem){showError(error,problem);return}
-      detail(target);
+      guide();
     };
     show('解鎖企鵝造型',form,'outfit');
   }
@@ -3738,8 +3737,22 @@ function rnd(a,b){return a+Math.random()*(b-a)}
 /* ---------- terraced island ---------- */
 const R=13;
 const MAIN_ISLAND_SCALE=1.1;
+const PIER_HEADING=.95;
+const MAIN_LAND_BUDGET=12, ISLET_CAPACITY=6;
+const shoreExtensions=[[-9.8,8.1],[9.8,8.1],[-9.8,-8.1],[9.8,-8.1]];
+let expandedShoreCount=0;
 function noise(x,z){return Math.sin(x*.45+1.3)*Math.cos(z*.38+.4)*.55+Math.sin(x*1.1+z*.9)*.22+Math.cos(z*1.7-x*.6)*.12}
 function baseHeight(x,z){
+  let extra=-Infinity;
+  for(let i=0;i<expandedShoreCount;i++){
+    const [cx,cz]=shoreExtensions[i];
+    const distance=Math.hypot((x-cx)/5.1,(z-cz)/4.6);
+    if(distance<1.15)extra=Math.max(extra,.86+noise(x,z)*.16-3.1*smooth(.48,1.15,distance));
+  }
+  if(x>0&&z>0&&Number.isFinite(extra)){
+    const side=Math.abs(x*Math.cos(PIER_HEADING)-z*Math.sin(PIER_HEADING));
+    extra=THREE.MathUtils.lerp(-4,extra,smooth(2.1,3.8,side));
+  }
   x/=MAIN_ISLAND_SCALE;
   z/=MAIN_ISLAND_SCALE;
   const r=Math.hypot(x,z*1.15)/R;
@@ -3750,7 +3763,7 @@ function baseHeight(x,z){
   h-=0.2;
   h-=14*smooth(.98,1.6,r);
   if(h>0){const s=.75,q=Math.floor(h/s),fr=h/s-q;h=(q+smooth(.78,1,fr))*s+.12}
-  return h;
+  return Math.max(h,extra);
 }
 // Terrain is derived from lifetime journal progress, so existing saves migrate automatically.
 const TERRITORIES=TERRAIN_MILESTONES;
@@ -3775,25 +3788,42 @@ function H(x,z){
 }
 const terrainGeometry=new THREE.PlaneGeometry(64,58,192,174);
 terrainGeometry.rotateX(-Math.PI/2);
+const terrainIndices=terrainGeometry.index.array;
+const terrainPoints=terrainGeometry.attributes.position;
+const terrainHeights=new Float32Array(terrainPoints.count);
+const terrainRegions=new Uint8Array(terrainPoints.count);
 const island=new THREE.Mesh(terrainGeometry.toNonIndexed(),M('#ffffff',{vertexColors:true}));
 terrainGeometry.dispose();island.receiveShadow=true;scene.add(island);
-function rebuildTerrain(total){
+function rebuildTerrain(total,landDemand=0){
   terrainTotal=total;
-  const signature=TERRITORIES.filter(area=>total>=area.at).map(area=>area.at).join(',');
+  const open=TERRITORIES.filter(area=>total>=area.at);
+  expandedShoreCount=Math.min(shoreExtensions.length,Math.max(0,Math.ceil((landDemand-MAIN_LAND_BUDGET-open.length*ISLET_CAPACITY)/5)));
+  const signature=open.map(area=>area.at).join(',')+':'+expandedShoreCount;
   if(island.geometry.getAttribute('color')&&signature===terrainSignature)return;
   terrainSignature=signature;
   const geometry=island.geometry,positions=geometry.attributes.position;
-  for(let i=0;i<positions.count;i++)positions.setY(i,H(positions.getX(i),positions.getZ(i)));
+  for(let i=0;i<terrainPoints.count;i++){
+    const x=terrainPoints.getX(i),z=terrainPoints.getZ(i),base=baseHeight(x,z);
+    let height=base,region=0;
+    for(let j=0;j<open.length;j++){
+      const edge=territoryHeight(open[j],x,z);
+      height=Math.max(height,edge);
+      if(edge>base+.05)region=j+1;
+    }
+    terrainHeights[i]=height;
+    terrainRegions[i]=region;
+  }
+  for(let i=0;i<positions.count;i++)positions.setY(i,terrainHeights[terrainIndices[i]]);
   positions.needsUpdate=true;geometry.computeVertexNormals();
-  const normals=geometry.attributes.normal,colors=[],color=new THREE.Color();
+  const normals=geometry.attributes.normal,colors=new Float32Array(positions.count*3),color=new THREE.Color();
   for(let i=0;i<positions.count;i+=3){
     const x=(positions.getX(i)+positions.getX(i+1)+positions.getX(i+2))/3;
     const z=(positions.getZ(i)+positions.getZ(i+1)+positions.getZ(i+2))/3;
     const y=(positions.getY(i)+positions.getY(i+1)+positions.getY(i+2))/3;
-    const area=TERRITORIES.findLast(area=>total>=area.at&&territoryHeight(area,x,z)>baseHeight(x,z)+.05);
+    const region=terrainIndices[i],area=open[terrainRegions[region]-1];
     color.set(y<0?'#739ca8':normals.getY(i)<.65?(area?'#9a9f95':'#86b6bf'):area?area.color:'#e3f1f0');
     if(y>0&&area)color.multiplyScalar(.94+.06*Math.sin(x*2+z));
-    for(let j=0;j<3;j++)colors.push(color.r,color.g,color.b);
+    for(let j=0;j<3;j++)color.toArray(colors,(i+j)*3);
   }
   geometry.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));
   geometry.computeBoundingSphere();geometry.computeBoundingBox();
@@ -3802,8 +3832,27 @@ rebuildTerrain(0);
 
 /* ---------- water ---------- */
 const waterGeo=new THREE.PlaneGeometry(240,240,64,64);waterGeo.rotateX(-Math.PI/2);
-const wBase=Float32Array.from(waterGeo.attributes.position.array);
 const water=new THREE.Mesh(waterGeo,M('#2a5360',{transparent:true,opacity:.95,roughness:.6,side:THREE.DoubleSide}));
+const waveTime={value:0};
+water.material.onBeforeCompile=shader=>{
+  shader.uniforms.waveTime=waveTime;
+  shader.vertexShader=`
+    uniform float waveTime;
+    vec3 wavePhase(vec3 point) {
+      return vec3(point.x*.25+waveTime*1.1, point.z*.3+waveTime*.9, (point.x+point.z)*.6+waveTime*2.);
+    }
+  `+shader.vertexShader
+    .replace('#include <beginnormal_vertex>',`
+      #include <beginnormal_vertex>
+      vec3 phase = wavePhase(position);
+      float jointSlope = .018*cos(phase.z);
+      objectNormal = normalize(vec3(-(.02*cos(phase.x)+jointSlope), 1., .021*sin(phase.y)-jointSlope));
+    `)
+    .replace('#include <begin_vertex>',`
+      #include <begin_vertex>
+      transformed.y += .08*sin(phase.x)+.07*cos(phase.y)+.03*sin(phase.z);
+    `);
+};
 water.receiveShadow=true;scene.add(water);
 
 /* ---------- ice slabs, icebergs, crystals ---------- */
@@ -3912,7 +3961,7 @@ const territoryScenery=TERRITORIES.map(area=>{
     }
   }
   group.add(bridge);
-  return {group,direction,start,end,radius,deckHeight,visitors:new Set(),crossing:null};
+  return {area,group,direction,start,end,radius,deckHeight,visitors:new Set(),crossing:null};
 });
 
 /* ---------- church, pier, flag ---------- */
@@ -3971,26 +4020,27 @@ const territoryScenery=TERRITORIES.map(area=>{
 // The first plank overlaps solid land, and the deck follows the shore down to sea level.
 const pier=new THREE.Group();scene.add(pier);
 const pierWood=M('#c99a6c'),pierPost=M('#9a7350');
-const pierAngle=.95,pierStart=new THREE.Vector3(0,0,0);
+const pierAngle=PIER_HEADING,pierStart=new THREE.Vector3(0,0,0);
 let shoreDistance=11;
 while(shoreDistance>1&&H(Math.sin(pierAngle)*shoreDistance,Math.cos(pierAngle)*shoreDistance)<.45)shoreDistance-=.1;
 shoreDistance-=.7;
 pierStart.set(Math.sin(pierAngle)*shoreDistance,0,Math.cos(pierAngle)*shoreDistance);
 pier.position.copy(pierStart);pier.rotation.y=pierAngle;
-const pierLength=8,pierSteps=25;
+const pierLength=8,pierSteps=25,pierWidth=2.8,pierDeckHeights=[];
 for(let i=0;i<=pierSteps;i++){
   const distance=i*pierLength/pierSteps;
   const x=pierStart.x+Math.sin(pierAngle)*distance,z=pierStart.z+Math.cos(pierAngle)*distance;
   const deckY=Math.max(.57,H(x,z)+.15);
-  const plank=new THREE.Mesh(new THREE.BoxGeometry(1.8,.14,.32),pierWood);
+  pierDeckHeights.push(deckY+.07);
+  const plank=new THREE.Mesh(new THREE.BoxGeometry(pierWidth,.14,.32),pierWood);
   plank.position.set(0,deckY,distance);plank.castShadow=plank.receiveShadow=true;pier.add(plank);
-  if(i%5===0)for(const side of[-.8,.8]){
+  if(i%5===0)for(const side of[-1.28,1.28]){
     const post=new THREE.Mesh(new THREE.CylinderGeometry(.09,.11,deckY+1.5,6),pierPost);
     post.position.set(side,(deckY-.9)/2,distance);post.castShadow=true;pier.add(post);
   }
 }
 const bucket=new THREE.Mesh(new THREE.CylinderGeometry(.28,.22,.4,8),M('#6a8fa3'));
-bucket.position.set(.5,.84,pierLength-.5);pier.add(bucket);
+bucket.position.set(1.03,.84,pierLength-.55);pier.add(bucket);
 const flag=(function(){
   const x=-4,z=-3.5,y=H(x,z);
   const pole=new THREE.Mesh(new THREE.CylinderGeometry(.05,.05,2.6,6),M('#9a7350'));pole.position.set(x,y+1.3,z);pole.castShadow=true;scene.add(pole);
@@ -4097,6 +4147,7 @@ for(const mesh of [fishMesh,fishTails]){
 }
 let ambT=0;
 const fishPose=new THREE.Object3D(),tailPose=new THREE.Object3D(),tailMatrix=new THREE.Matrix4();
+const fishCrowns=new THREE.Group();scene.add(fishCrowns);
 fishPose.add(tailPose);tailPose.position.z=-.315;
 const gratitudeFish=new Map();
 let visibleFish=[],fishSelectionTime=-Infinity,trackedFish=null;
@@ -4109,7 +4160,7 @@ function syncGratitudeFish(entries){
     for(const char of entry.id)hash=Math.imul(hash^char.charCodeAt(0),16777619);
     hash>>>=0;
     gratitudeFish.set(entry.id,{
-      id:entry.id,school:hash%schoolCount,phase:(hash%4096)*Math.PI/2048,
+      id:entry.id,bornAt:entry.bornAt,school:hash%schoolCount,phase:(hash%4096)*Math.PI/2048,
       spread:.35+(hash%29)*.061,size:.77+(hash%5)*.105
     });
   }
@@ -4138,6 +4189,7 @@ function swimMackerel(t){
     fishMesh.count=fishTails.count=visibleFish.length;
     fishSelectionTime=t;
   }
+  let crownIndex=0;
   visibleFish.forEach((fish,index)=>{
     const angle=positionMackerel(fish,t,fishPose.position),phase=fish.phase;
     fishPose.rotation.set(Math.sin(t*1.1+phase)*.07,-angle+Math.sin(t*4.8+phase)*.07,Math.sin(angle*2+phase*.25)*.26);
@@ -4146,7 +4198,18 @@ function swimMackerel(t){
     tailPose.rotation.y=Math.sin(t*8.2+phase)*.43;
     tailPose.updateMatrix();tailMatrix.multiplyMatrices(fishPose.matrix,tailPose.matrix);
     fishTails.setMatrixAt(index,tailMatrix);
+    if(bornToday(fish.bornAt)){
+      const crown=fishCrowns.children[crownIndex]||makeNewCrown(fishCrowns);
+      crown.position.copy(fishPose.position);
+      crown.position.y+=.18*fish.size;
+      crown.position.z+=Math.cos(angle)*.11;
+      crown.position.x-=Math.sin(angle)*.11;
+      crown.scale.setScalar(.075*fish.size);
+      crown.visible=true;
+      crownIndex++;
+    }
   });
+  for(let i=crownIndex;i<fishCrowns.children.length;i++)fishCrowns.children[i].visible=false;
   fishMesh.instanceMatrix.needsUpdate=true;
   fishTails.instanceMatrix.needsUpdate=true;
 }
@@ -4154,7 +4217,7 @@ animals.push((t,dt)=>{
   const on=uwV>.01;
   if(on)kelp.forEach(k=>{const p=k.m.geometry.attributes.position;for(let i=0;i<p.count;i++){const y=k.base[i*3+1],f=(y/k.h)**1.3;p.setX(i,k.base[i*3]+Math.sin(t*1.1+k.ph+y*.7)*.45*f);p.setZ(i,k.base[i*3+2]+Math.cos(t*.8+k.ph+y*.5)*.3*f)}p.needsUpdate=true});
   rays.forEach(r=>{r.m.visible=on;if(!on)return;r.m.rotation.y=Math.atan2(camera.position.x-r.m.position.x,camera.position.z-r.m.position.z);r.m.material.opacity=uwV*.2*(.6+.4*Math.sin(t*.5+r.ph))*Math.min(1.3,sun.intensity/.6);r.m.position.x=r.x+Math.sin(t*.2+r.ph)*.8});
-  fishMesh.visible=fishTails.visible=on;
+  fishMesh.visible=fishTails.visible=fishCrowns.visible=on;
   if(on)swimMackerel(t);
   GratitudeRays.update(t,on,trackedFish);
   AngerSharks.update(t,dt,on,trackedFish);
@@ -4251,8 +4314,7 @@ function sealBrain(m,patrol){const st={k:'look',t:0,d:rnd(2,5)},ph=rnd(0,9);
     if(st.t>st.d){const r=Math.random();st.k=r<.3?'look':r<.5?'clap':r<.7?'roll':r<.85?'bark':'nap';st.t=0;
       st.d={look:rnd(3,5),clap:2.2,roll:3.2,bark:1.6,nap:5.5}[st.k];
       if(st.k==='clap')emote(m.g,'啪啪','#3f8fb0',1.8,1.75,.75);if(st.k==='bark')emote(m.g,'嗷!','#3f8fb0',1.4,1.75,.75);if(st.k==='nap')emote(m.g,'Zz','#6f8fb5',2.4,1.6,.75)}
-    const T=st.t,moving=st.k==='look';
-    patrol(dt,moving);
+    const T=st.t,moving=patrol(dt,st.k==='look');
     let hy=Math.sin(t*.45+ph)*.6,hx=-.15+Math.sin(t*.3+ph*2)*.18,roll=0,clap=0,rearF=Math.max(0,Math.sin(t*.7+ph))**6*.6;
     if(st.k==='clap'){hx=-.45;hy=0;clap=Math.max(0,Math.sin(T*13))}
     if(st.k==='bark'){hx=-.62+Math.max(0,Math.sin(T*9))*.18;hy=0}
@@ -4352,9 +4414,8 @@ function bearBrain(b,phase,patrol){
     if(st.t>st.d){const r=Math.random();st.k=st.k!=='walk'?'walk':(r<.3?'sniff':r<.6?'sit':r<.8?'shake':'stand');st.t=0;
       st.d={walk:rnd(6,10),sniff:rnd(3.5,5),sit:rnd(5,7),shake:1.8,stand:rnd(3,4)}[st.k];
       if(st.k==='sniff')emote(b.g,'?','#5d7f96',1.6,2.5,.8);if(st.k==='shake')emote(b.g,'抖抖','#5d7f96',1.6,2.5,.8);if(st.k==='sit')emote(b.g,'呼~','#5d7f96',2,2.6,.8)}
-    const T=st.t,walking=st.k==='walk';
+    const T=st.t,walking=patrol(dt,st.k==='walk');
     if(walking)wph+=dt*5;
-    patrol(dt,walking);
     let tx=0,tz=0,ty=0,hx=.12+Math.sin(t*.4)*.1,hy=Math.sin(t*.4)*.45,legX=[0,0,0,0],seat=0;
     if(walking){legX=legX.map((_,i)=>Math.sin(wph+((i===0||i===3)?0:Math.PI))*.26);ty=Math.abs(Math.sin(wph))*.03;tz=Math.sin(wph)*.02}
     if(st.k==='sniff'){hx=.55+Math.sin(T*9)*.05;hy=Math.sin(T*1.3)*.5;tx=.06}
@@ -4631,8 +4692,8 @@ const GratitudeRays=(()=>{
     notes.clear();
     for(const e of entries){if(e.fish!=='manta'&&e.fish!=='skate')continue;const h=hash(e.id);
       notes.set(e.id,e.fish==='manta'
-        ?{id:e.id,kind:'manta',phase:(h%4096)*Math.PI/2048,R:28+(h%51)/10,depth:4.3+(h%9)*.15}
-        :{id:e.id,kind:'skate',phase:(h%4096)*Math.PI/2048,R:29+(h%141)/10,depth:0})}
+        ?{id:e.id,bornAt:e.bornAt,kind:'manta',phase:(h%4096)*Math.PI/2048,R:28+(h%51)/10,depth:4.3+(h%9)*.15}
+        :{id:e.id,bornAt:e.bornAt,kind:'skate',phase:(h%4096)*Math.PI/2048,R:29+(h%141)/10,depth:0})}
     pickTime=-Infinity;
   }
   function pose(note,t,out){
@@ -4655,7 +4716,8 @@ const GratitudeRays=(()=>{
     for(const kind of Object.keys(KINDS)){const K=KINDS[kind];
       shown[kind].forEach((n,i)=>{const m=pools[kind][i];
         m.g.userData.waterNoteId=n.id;
-        m.g.rotation.y=pose(n,t,m.g.position);m.inner.rotation.z=K.bank;m.animate(t*K.beat+n.phase*4)})}
+        m.g.rotation.y=pose(n,t,m.g.position);m.inner.rotation.z=K.bank;m.animate(t*K.beat+n.phase*4);
+        crownFor(m.g,n.bornAt,n.kind==='manta'?.26:.24,.55,.27)})}
   }
   const pickables=()=>group.visible?group.children.filter(model=>model.visible):[];
   return {sync,update,pickables,pose:(id,t,out)=>{const n=notes.get(id);if(!n)return null;pose(n,t,out);return n},has};
@@ -4695,7 +4757,7 @@ const AngerSharks=(()=>{
   function sync(entries){
     const next=new Map();
     for(const e of entries){if(e.released)continue;const h=hash(e.id);
-      next.set(e.id,{id:e.id,level:e.level,phase:(h%4096)*Math.PI/2048,dr:((h>>>12)%7)/10-.3,depth:6+((h>>>4)%16)/10,cycle:20+((h>>>8)%201)/10,offset:(h>>>16)%40})}
+      next.set(e.id,{id:e.id,bornAt:e.bornAt,level:e.level,phase:(h%4096)*Math.PI/2048,dr:((h>>>12)%7)/10-.3,depth:6+((h>>>4)%16)/10,cycle:20+((h>>>8)%201)/10,offset:(h>>>16)%40})}
     // sharks that just left (released) and were on screen swim away and fade
     for(const kind of Object.keys(pools))shown[kind].forEach((n,i)=>{
       if(next.has(n.id))return;const m=pools[kind][i];if(!m.g.visible)return;
@@ -4724,6 +4786,7 @@ const AngerSharks=(()=>{
       const vy=(m.g.position.y-y0)/Math.max(dt,1e-4);
       m.g.rotation.y=yaw;m.inner.rotation.x=THREE.MathUtils.clamp(-vy/2.2,-.35,.35);m.inner.rotation.z=-.08;
       m.animate(t*5+n.phase*4,2.1);
+      crownFor(m.inner,n.bornAt,.48,n.level==='very'?2:1.5,.46);
       if(near&&dt&&Math.random()<dt*2.5){m.g.localToWorld(tmp.set(0,0,.2));splash(tmp.x,0,tmp.z,1,1,.35)}
     });
     for(let i=leaving.length-1;i>=0;i--){const L=leaving[i];L.t+=dt;L.ph+=dt*8;
@@ -5417,36 +5480,40 @@ function dressPenguin(penguin,outfit,extra=EXTRA_OUTFITS[outfit]){
   penguin.outfit=outfit;
 }
 function freeAt(x,z,r){return obstacles.every(o=>Math.hypot(x-o.x,z-o.z)>o.r+r)}
-function landPoint(r=.6){for(let k=0;k<120;k++){const x=rnd(-12,12)*MAIN_ISLAND_SCALE,z=rnd(-10,10)*MAIN_ISLAND_SCALE;if(baseHeight(x,z)>.3&&freeAt(x,z,r)&&penguins.every(q=>Math.hypot(q.g.position.x-x,q.g.position.z-z)>q.rad+r))return new THREE.Vector3(x,0,z)}return new THREE.Vector3(0,0,0)}
 function addPenguin(type,start){
   const p=buildPenguin(type);
   p.ph=rnd(0,10);p.vy=0;p.jy=0;p.rad=(type==='chick'?.78:.66)*SPECIES[type].size;p.stuck=0;
   p.mode='idle';p.timer=start?3.2:rnd(0,2);
-  p.g.position.copy(start||landPoint(p.rad));p.target=landPoint(p.rad);
+  p.g.position.copy(start||new THREE.Vector3(rnd(-7,7),0,rnd(-5,8)));p.target=p.g.position.clone();
   p.g.position.y=H(p.g.position.x,p.g.position.z);
   p.g.rotation.y=start?.65:rnd(0,6);
   scene.add(p.g);penguins.push(p);return p;
 }
 /* ---------- penguin activities ---------- */
-function landList(){return penguins.filter(q=>q.g.visible&&!islandVisits.has(q.g.userData.journalId)&&(q.mode==='idle'||q.mode==='walk'))}
-function nearPenguin(p,maxD){let best=null,bd=maxD;landList().forEach(q=>{if(q===p)return;const d=q.g.position.distanceTo(p.g.position);if(d<bd){bd=d;best=q}});return best}
+function landList(){return penguins.filter(q=>q.g.visible&&!isTraveling(q)&&(q.mode==='idle'||q.mode==='walk'))}
+function nearPenguin(p,maxD){let best=null,bd=maxD;landList().forEach(q=>{if(q===p||homeIslet(q)!==homeIslet(p))return;const d=q.g.position.distanceTo(p.g.position);if(d<bd){bd=d;best=q}});return best}
 function startAct(p,kind,o={}){p.mode='act';p.act=Object.assign({kind,t:0,dur:2},o);const A=p.act;
   if(kind==='dance'){A.dur=o.dur||rnd(5,7);A.em=0;emote(p.g,'♪','#e07a3f',1.5)}
   else if(kind==='quarrel')A.dur=o.dur||rnd(3.5,5);
   else if(kind==='fall'){A.dur=rnd(2.4,3.2);A.lie=A.dur-.8}
-  else if(kind==='slide'){A.dur=99;A.target=landPoint(p.rad)}
+  else if(kind==='slide'){A.dur=99;A.target=roamingTarget(p)||p.g.position.clone()}
   else if(kind==='bow')A.dur=o.dur||3.3;
   else if(kind==='sleep')A.dur=rnd(5,8);
   else if(kind==='shake'){A.dur=1.1;if(p.jy===0){p.jy=.01;p.vy=2.5}}
 }
 function endAct(p){const A=p.act;p.act=null;p.mode='idle';p.timer=rnd(.8,2.5);
   if(A.kind==='quarrel'){if(A.loser){startAct(p,'fall');return}
-    if(A.win){p.flapT=1.4;emote(p.g,'耶!','#e07a3f',1.3)}p.mode='walk';p.target=landPoint(p.rad);p.stuck=0}}
+    if(A.win){p.flapT=1.4;emote(p.g,'耶!','#e07a3f',1.3)}beginPenguinWalk(p)}}
+function beginPenguinWalk(p){
+  p.target=roamingTarget(p);
+  if(p.target){p.mode='walk';resetLandRoute(p,p.target)}
+  else{p.mode='idle';p.timer=rnd(.9,2.3)}
+}
 function chooseNext(p){
   if(EXTRA_OUTFITS[p.outfit]?.behavior?.choose(p,{now:worldTime,landList,startAct}))return;
   const r=Math.random();
-  if(r<.4){p.mode='walk';p.target=landPoint(p.rad);p.stuck=0;return}
-  if(r<.5){startAct(p,'dance');const dur=p.act.dur;landList().forEach(q=>{if(q!==p&&q.g.position.distanceTo(p.g.position)<3.5&&Math.random()<.6)startAct(q,'dance',{dur})});return}
+  if(r<.52){beginPenguinWalk(p);return}
+  if(r<.57){startAct(p,'dance');const dur=p.act.dur;landList().forEach(q=>{if(q!==p&&homeIslet(q)===homeIslet(p)&&q.g.position.distanceTo(p.g.position)<3.5&&Math.random()<.6)startAct(q,'dance',{dur})});return}
   if(r<.61){const q=nearPenguin(p,4);if(q){const dur=rnd(3.5,5),l=Math.random()<.5;startAct(p,'quarrel',{partner:q,side:0,dur,win:l});startAct(q,'quarrel',{partner:p,side:1,dur,loser:l});emote(p.g,'嘎!','#d9534f',1.4);return}}
   if(r<.71){const q=nearPenguin(p,3.2);if(q&&p.type!=='chick'&&q.type!=='chick'){startAct(p,'bow',{partner:q});startAct(q,'bow',{partner:p});emote(p.g,'♥','#e8798f',2.2);emote(q.g,'♥','#e8798f',2.2);return}startAct(p,'bow');return}
   if(r<.78){startAct(p,'slide');return}
@@ -5501,12 +5568,79 @@ function setTime(k){target=PRESETS[k];['day','dusk','night'].forEach(n=>document
 
 /* Each resident keeps the journal's stable ID, independently of its current pose. */
 const residents=new Map();
+let lastResidentState;
+const visiblePersonalResidents=new Map();
+function displayedResidents(state){
+  if(!state.personalIsland)return state.entries;
+  const selected=new Map();
+  for(const [species,id] of visiblePersonalResidents){
+    if(state.entries.some(entry=>entry.species===species&&entry.id===id))selected.set(species,new Set([id]));
+  }
+  for(const {id,species} of state.entries){
+    if(!landRadius[species])continue;
+    if(!selected.has(species))selected.set(species,new Set());
+    const ids=selected.get(species);
+    if(ids.size<3)ids.add(id);
+  }
+  return state.entries.filter(entry=>!landRadius[entry.species]||selected.get(entry.species).has(entry.id));
+}
+const crownsByParent=new WeakMap();
+const crownMaterial=M('#efbd51',{side:THREE.DoubleSide,roughness:.36});
+const crownGeometry=(()=>{
+  const geometry=new THREE.BufferGeometry(),points=[],indices=[],count=20;
+  for(let i=0;i<count;i++){
+    const angle=i*Math.PI*2/count,x=Math.cos(angle),z=Math.sin(angle);
+    points.push(.79*x,0,.79*z,x,i%4===0?.84:i%2?.4:.29,z);
+    const a=i*2,b=(a+2)%(count*2);
+    indices.push(a,b,a+1,b,b+1,a+1);
+  }
+  geometry.setAttribute('position',new THREE.Float32BufferAttribute(points,3));
+  geometry.setIndex(indices);geometry.computeVertexNormals();
+  return geometry;
+})();
+let todayStart=0,tomorrowStart=0;
+function updateCrownDay(now=Date.now()){
+  if(now>=todayStart&&now<tomorrowStart)return;
+  const day=new Date(now);
+  day.setHours(0,0,0,0);todayStart=+day;
+  day.setDate(day.getDate()+1);tomorrowStart=+day;
+}
+function bornToday(time){return Number.isFinite(time)&&time>=todayStart&&time<tomorrowStart}
+function makeNewCrown(parent){
+  const crown=new THREE.Mesh(crownGeometry,crownMaterial);
+  crown.name='new-resident-crown';
+  parent.add(crown);
+  return crown;
+}
+function crownFor(parent,bornAt,y,z,size){
+  const fresh=bornToday(bornAt);
+  let crown=crownsByParent.get(parent);
+  if(fresh&&!crown){
+    crown=makeNewCrown(parent);
+    crown.position.set(0,y,z);crown.scale.setScalar(size);
+    crownsByParent.set(parent,crown);
+  }
+  if(crown)crown.visible=fresh;
+}
+function residentCrown({entry,model}){
+  if(model.feet){
+    const h=model.type==='chick'?1.79:2.55;
+    crownFor(model.inner,entry.bornAt,h+(entry.outfit?.12:0),leanOf(SPECIES[model.type],h),.31);
+  }else if(entry.species==='seal')crownFor(model.head,entry.bornAt,.43,.11,.3);
+  else if(entry.species==='bear')crownFor(model.head,entry.bornAt,.56,.36,.43);
+  else{
+    const size=entry.species==='dolphin'?.36:.62;
+    const y=entry.species==='dolphin'?.56:entry.species==='whale'?1.43:1.08;
+    const z=entry.species==='dolphin'?1.02:entry.species==='narwhal'?1.98:2.05;
+    crownFor(model.inner,entry.bornAt,y,z,size);
+  }
+}
 
 // Conservative horizontal footprints allow room for flippers, tails and costumes.
 const landRadius={seal:1.22,bear:2.05};
 function landClear(model,x,z){
   for(const {model:other} of residents.values()){
-    if(other===model||!other.g.visible||!other.collisionRadius)continue;
+    if(other===model||!other.g.visible||!other.collisionRadius||penguinSwims.get(other)?.submerged)continue;
     const clearance=model.collisionRadius+other.collisionRadius;
     if((other.g.position.x-x)**2+(other.g.position.z-z)**2<clearance**2)return false;
   }
@@ -5516,12 +5650,43 @@ function landStep(model,x,z,allowShore=false){
   return landClear(model,x,z)&&H(x,z)>(allowShore?.04:.17)
     &&freeAt(x,z,Math.min(model.collisionRadius,.65));
 }
-const avoidanceAngles=[.52,1.05,1.57,-.52,-1.05,-1.57,2.35,-2.35,Math.PI];
-function advanceOnLand(model,position,dx,dz,dt,allowShore=false){
+function homeIslet(model){return islandVisits.get(model.g.userData.journalId)?.islet}
+function isTraveling(model){
+  const visit=islandVisits.get(model.g.userData.journalId);
+  return pierArrivals.has(model.g.userData.journalId)||penguinSwims.has(model)||visit&&visit.phase!=='rest';
+}
+function roamingGround(islet,x,z){
+  return (islet?territoryHeight(islet.area,x,z):baseHeight(x,z))>.18;
+}
+function bridgeDistance(islet,x,z){
+  let nearest=islet?Infinity:Math.hypot(x-pierStart.x,z-pierStart.z);
+  for(const bridge of territoryScenery){
+    if(!bridge.group.visible||(islet&&islet!==bridge))continue;
+    const distance=islet?bridge.end:bridge.start;
+    nearest=Math.min(nearest,Math.hypot(x-bridge.direction.x*distance,z-bridge.direction.y*distance));
+  }
+  return nearest;
+}
+function roamingTarget(model){
+  const pos=model.g.position,islet=homeIslet(model),clearance=1.4+model.collisionRadius;
+  for(let attempt=0;attempt<18;attempt++){
+    const direction=rnd(0,Math.PI*2),distance=rnd(1.25,4.6);
+    const x=pos.x+Math.cos(direction)*distance,z=pos.z+Math.sin(direction)*distance;
+    const midX=(x+pos.x)*.5,midZ=(z+pos.z)*.5;
+    if(roamingGround(islet,x,z)&&roamingGround(islet,midX,midZ)
+      &&bridgeDistance(islet,x,z)>clearance&&landStep(model,x,z))return new THREE.Vector3(x,0,z);
+  }
+  return null;
+}
+const avoidanceAngles=[.52,1.05,1.57,-.52,-1.05,-1.57,2.05,-2.05];
+function advanceOnLand(model,position,dx,dz,dt,allowShore=false,roaming=false){
   const length=Math.hypot(dx,dz);
   if(length<1e-5)return false;
   const x=position.x,z=position.z;
-  const clear=(vx,vz)=>landStep(model,x+vx,z+vz,allowShore);
+  const islet=roaming?homeIslet(model):null;
+  const bridgeLimit=roaming?Math.min(1.35+model.collisionRadius,bridgeDistance(islet,x,z)):0;
+  const clear=(vx,vz)=>landStep(model,x+vx,z+vz,allowShore)
+    &&(!roaming||(roamingGround(islet,x+vx,z+vz)&&bridgeDistance(islet,x+vx,z+vz)>=bridgeLimit-1e-5));
   if(model.detourTime>0){
     model.detourTime-=dt;
     const stepX=Math.cos(model.detourHeading)*length,stepZ=Math.sin(model.detourHeading)*length;
@@ -5533,10 +5698,8 @@ function advanceOnLand(model,position,dx,dz,dt,allowShore=false){
   }
   if(clear(dx,dz)){
     position.x+=dx;position.z+=dz;
-    model.blockedFor=0;
     return true;
   }
-  model.blockedFor=(model.blockedFor||0)+dt;
   const heading=Math.atan2(dz,dx);
   for(const angle of avoidanceAngles){
     const direction=heading+angle*(model.avoidSide||1);
@@ -5545,25 +5708,54 @@ function advanceOnLand(model,position,dx,dz,dt,allowShore=false){
     position.x+=stepX;position.z+=stepZ;
     // Commit briefly to the chosen side so the animal can clear the obstacle.
     model.detourHeading=direction;
-    model.detourTime=.55;
+    model.detourTime=.38;
     return true;
   }
   return false;
 }
-function placeLandResident(model,preferred){
-  const {g,collisionRadius}=model;
-  if(landStep(model,preferred.x,preferred.z,true)){
+function resetLandRoute(model,target){
+  model.detourTime=0;model.walkStall=0;
+  model.bestDistance=Math.hypot(target.x-model.g.position.x,target.z-model.g.position.z);
+}
+function measureLandProgress(model,distance,dt){
+  if(distance<model.bestDistance-.14){model.bestDistance=distance;model.walkStall=0}
+  else model.walkStall=(model.walkStall||0)+dt;
+}
+let landCandidateSignature;
+const landCandidates=new Map();
+function landCandidatesFor(islet){
+  if(landCandidateSignature!==terrainSignature){
+    landCandidates.clear();
+    landCandidateSignature=terrainSignature;
+  }
+  if(landCandidates.has(islet))return landCandidates.get(islet);
+  const points=[],cx=islet?.area.x||0,cz=islet?.area.z||0,maxRing=islet?13:expandedShoreCount?32:25;
+  for(let ring=1;ring<=maxRing;ring++){
+    const samples=ring*5;
+    for(let i=0;i<samples;i++){
+      const angle=i*2*Math.PI/samples+ring*2.39996;
+      const x=cx+Math.cos(angle)*ring*.5,z=cz+Math.sin(angle)*ring*.5;
+      if(roamingGround(islet,x,z)&&freeAt(x,z,.65)){
+        const distance=bridgeDistance(islet,x,z);
+        if(distance>2)points.push({x,z,distance,y:H(x,z)});
+      }
+    }
+  }
+  landCandidates.set(islet,points);
+  return points;
+}
+function placeLandResident(model,preferred,islet=null){
+  const {g}=model;
+  const canPlace=(x,z)=>roamingGround(islet,x,z)&&landStep(model,x,z)
+    &&bridgeDistance(islet,x,z)>1.35+model.collisionRadius;
+  if(canPlace(preferred.x,preferred.z)){
     g.position.set(preferred.x,H(preferred.x,preferred.z),preferred.z);
     return true;
   }
-  // Try the whole main island before waiting for a vacancy.
-  for(let ring=1;ring<=22;ring++){
-    for(let i=0;i<ring*6;i++){
-      const angle=i*Math.PI/(ring*3),x=Math.cos(angle)*ring*.48*MAIN_ISLAND_SCALE,z=Math.sin(angle)*ring*.48*MAIN_ISLAND_SCALE;
-      if(baseHeight(x,z)>.17&&freeAt(x,z,Math.min(collisionRadius,.65))&&landClear(model,x,z)){
-        g.position.set(x,H(x,z),z);
-        return true;
-      }
+  for(const {x,y,z,distance} of landCandidatesFor(islet)){
+    if(distance>1.35+model.collisionRadius&&landClear(model,x,z)){
+      g.position.set(x,y,z);
+      return true;
     }
   }
   return false;
@@ -5572,13 +5764,77 @@ let nextLandPlacement=0;
 function admitWaitingResidents(time){
   if(time<nextLandPlacement)return;
   nextLandPlacement=time+1;
-  const waiting=[...residents.values()].filter(({model})=>model.collisionRadius&&!model.g.visible);
+  const waiting=[...residents.values()].filter(({entry,model})=>model.collisionRadius&&!model.g.visible&&!pierArrivals.has(entry.id));
   if(!waiting.length)return;
-  const {model}=waiting[Math.floor(time)%waiting.length];
-  model.g.visible=placeLandResident(model,model.spawnPoint);
+  const resident=waiting[Math.floor(time)%waiting.length];
+  resident.model.g.visible=placeResidentOnLand(resident);
 }
 const islandVisits=new Map();
-const ISLET_CAPACITY=6;
+const pierArrivals=new Map(),penguinSwims=new Map(),arrivalsSeen=new Set();
+let activePierArrival=null,welcomeFocusId=null,arrivalScope,arrivalScopeStarted=0;
+const pierDirection=new THREE.Vector2(Math.sin(pierAngle),Math.cos(pierAngle));
+function pierPoint(distance,position){
+  const x=pierStart.x+pierDirection.x*distance,z=pierStart.z+pierDirection.y*distance;
+  if(distance<0)return position.set(x,H(x,z),z);
+  const sample=Math.min(pierSteps,distance*pierSteps/pierLength),index=Math.floor(sample);
+  const height=THREE.MathUtils.lerp(pierDeckHeights[index],pierDeckHeights[Math.min(index+1,pierSteps)],sample-index);
+  return position.set(x,height,z);
+}
+function walkTravelPose(model,time,dt,moving){
+  if(model.feet){
+    const stride=moving?Math.sin(time*8):0;
+    model.inner.rotation.set(moving?.055:0,0,stride*.07);
+    model.inner.position.set(0,0,0);
+    model.feet.forEach((foot,index)=>{foot.position.z=.22+(index?-stride:stride)*.09;foot.rotation.x=0});
+    model.flips.forEach((flipper,index)=>{flipper.rotation.set(-.04,0,(index?1:-1)*(.16+Math.abs(stride)*.16))});
+  }
+  if(model.front)model.front.forEach((fin,index)=>{fin.rotation.x=moving?Math.sin(time*7+index*Math.PI)*.25:0});
+  if(model.legs)model.legs.forEach((leg,index)=>{leg.rotation.x=moving?Math.sin(time*7+((index===0||index===3)?0:Math.PI))*.25:0});
+  model.companion?.animate(time,dt,moving);
+}
+function queuePierArrival(resident){
+  const {entry,model}=resident;
+  resident.pierIntro=true;
+  model.g.visible=false;
+  pierArrivals.set(entry.id,{distance:pierLength-.24,target:new THREE.Vector3(),wait:0});
+}
+function updatePierArrivals(time,dt){
+  if(!activePierArrival){
+    if(!pierArrivals.size||pierPrayerVisitor)return;
+    activePierArrival=pierArrivals.keys().next().value;
+    const model=residents.get(activePierArrival).model;
+    pierPoint(pierArrivals.get(activePierArrival).distance,model.g.position);
+    model.g.rotation.y=pierAngle+Math.PI;
+    model.g.visible=true;
+    if(welcomeFocusId===activePierArrival)welcomeResident(activePierArrival);
+    if(pierArrivals.get(activePierArrival).celebrate)celebrate('journal',activePierArrival);
+  }
+  const id=activePierArrival, arrival=pierArrivals.get(id),{model}=residents.get(id);
+  const g=model.g,speed=model.feet?1.12:1.05;
+  const next=Math.max(-2.6,arrival.distance-speed*dt);
+  const target=pierPoint(next,arrival.target);
+  const moved=next!==arrival.distance&&landClear(model,target.x,target.z);
+  if(moved){arrival.distance=next;arrival.wait=0;g.position.copy(target)}
+  else arrival.wait+=dt;
+  walkTravelPose(model,time,dt,moved);
+  if(arrival.distance<=-2.6||(arrival.distance<-.8&&arrival.wait>3)){
+    pierArrivals.delete(id);activePierArrival=null;
+    resetResidentRoaming(model);
+  }
+}
+function welcomeResident(id){
+  const resident=residents.get(id);
+  if(resident?.model.collisionRadius&&!resident.pierIntro){
+    finishIslandVisit(id);
+    penguinSwims.delete(resident.model);
+    resetResidentRoaming(resident.model);
+    queuePierArrival(resident);
+  }
+  if(pierArrivals.has(id)&&activePierArrival!==id){welcomeFocusId=id;return}
+  welcomeFocusId=null;
+  focusResident(id);
+  if(activePierArrival===id)previewUntil=clock.elapsedTime+12;
+}
 const BRIDGE_WAIT_TIME=4;
 let nextIslandVisit=2,visitIslandIndex=0;
 function finishIslandVisit(id){
@@ -5595,27 +5851,240 @@ function islandVisitSpot(islet,slot){
   return new THREE.Vector2(direction.x*distance+direction.y*lateral,
     direction.y*distance-direction.x*lateral);
 }
+function landWeight(radius){return radius>1.7?2:radius>1?1.35:1}
+function mainLandLoad(){
+  let load=0;
+  for(const {entry,model} of residents.values()){
+    if(!model.collisionRadius||!model.g.visible)continue;
+    const phase=islandVisits.get(entry.id)?.phase;
+    if(!phase||phase==='approach'||phase==='home')load+=landWeight(model.collisionRadius);
+  }
+  return load;
+}
+function openIsletsWithRoom(){
+  return territoryScenery.filter(islet=>islet.group.visible&&isletOccupancy(islet)<ISLET_CAPACITY)
+    .sort((a,b)=>a.visitors.size-b.visitors.size);
+}
+function isletOccupancy(islet){
+  return islet.visitors.size+[...penguinSwims.values()].filter(swim=>swim.destination===islet&&swim.source!==islet).length;
+}
+function freeVisitSlot(islet){
+  const occupied=new Set([...islet.visitors].map(id=>islandVisits.get(id).slot));
+  let slot=0;
+  while(occupied.has(slot))slot++;
+  return slot;
+}
+function resetResidentRoaming(model){
+  model.detourTime=0;model.patrolTarget=null;
+  if(model.feet){
+    if(model.act?.partner?.act?.partner===model)model.act.partner.act.partner=null;
+    model.act=null;model.mode='idle';model.timer=rnd(.4,2);model.stuck=0;
+  }
+}
+function settleOnIslet(resident,islet){
+  const {entry,model}=resident,slot=freeVisitSlot(islet),spot=islandVisitSpot(islet,slot);
+  const pos=model.g.position,home=model.g.visible?pos.clone():model.spawnPoint.clone();
+  if(!placeLandResident(model,{x:spot.x,z:spot.y},islet))return false;
+  islet.visitors.add(entry.id);
+  islandVisits.set(entry.id,{islet,slot,pos:pos.clone(),home,phase:'rest',distance:islet.end,
+    until:worldTime+48+slot*12+territoryScenery.indexOf(islet)*5,rotation:model.g.rotation.y});
+  resetResidentRoaming(model);
+  model.g.visible=true;
+  return true;
+}
+function placeResidentOnLand(resident){
+  const {model}=resident;
+  const islets=openIsletsWithRoom();
+  if(mainLandLoad()+landWeight(model.collisionRadius)>MAIN_LAND_BUDGET
+    &&islets.some(islet=>settleOnIslet(resident,islet)))return true;
+  return placeLandResident(model,model.spawnPoint)||islets.some(islet=>settleOnIslet(resident,islet));
+}
+const swimWaterline=-.66;
+const coastOffsets=[.36,-.36,.71,-.71,0,1.02,-1.02];
+let nextPenguinSwim=8;
+function coastPort(model,islet,angle){
+  const dx=Math.cos(angle),dz=Math.sin(angle),cx=islet?.area.x||0,cz=islet?.area.z||0;
+  let bank=null;
+  for(let distance=3;distance<21;distance+=.28){
+    const x=cx+dx*distance,z=cz+dz*distance;
+    if(roamingGround(islet,x,z)&&H(x,z)>.31&&bridgeDistance(islet,x,z)>1.6+model.collisionRadius
+      &&freeAt(x,z,.48))bank=new THREE.Vector3(x,H(x,z),z);
+    if(H(x,z)<-1.22&&bank&&Math.hypot(x-bank.x,z-bank.z)<4.8){
+      return {bank,water:new THREE.Vector3(x,swimWaterline,z),dx,dz};
+    }
+  }
+  return null;
+}
+function waterLane(first,second){
+  const steps=Math.ceil(first.distanceTo(second)/.33);
+  for(let i=0;i<=steps;i++){
+    const u=i/Math.max(1,steps);
+    if(H(THREE.MathUtils.lerp(first.x,second.x,u),THREE.MathUtils.lerp(first.z,second.z,u))>-.96)return false;
+  }
+  return true;
+}
+function swimDestinations(model,source){
+  const choices=openIsletsWithRoom().filter(islet=>islet!==source);
+  if(source&&mainLandLoad()<MAIN_LAND_BUDGET+expandedShoreCount*5+1)choices.push(null);
+  const pos=model.g.position;
+  return choices.sort((a,b)=>Math.hypot((a?.area.x||0)-pos.x,(a?.area.z||0)-pos.z)
+    -Math.hypot((b?.area.x||0)-pos.x,(b?.area.z||0)-pos.z));
+}
+function planPenguinSwim(model){
+  const source=homeIslet(model)||null,pos=model.g.position,sx=source?.area.x||0,sz=source?.area.z||0;
+  for(const destination of swimDestinations(model,source)){
+    const tx=destination?.area.x||0,tz=destination?.area.z||0,heading=Math.atan2(tz-sz,tx-sx);
+    const starts=coastOffsets.map(offset=>coastPort(model,source,heading+offset)).filter(Boolean)
+      .sort((a,b)=>a.bank.distanceToSquared(pos)-b.bank.distanceToSquared(pos));
+    const ends=coastOffsets.map(offset=>coastPort(model,destination,heading+Math.PI+offset)).filter(Boolean);
+    for(const from of starts){
+      if(!landClear(model,from.bank.x,from.bank.z))continue;
+      for(const to of ends){
+        if(!landClear(model,to.bank.x,to.bank.z)||!waterLane(from.water,to.water))continue;
+        return {source,destination,from,to,waterPath:[to.water]};
+      }
+    }
+  }
+  const angle=Math.atan2(pos.z-sz,pos.x-sx);
+  for(const offset of coastOffsets){
+    const from=coastPort(model,source,angle+offset);
+    if(!from||!landClear(model,from.bank.x,from.bank.z))continue;
+    const out=from.water.clone().add(new THREE.Vector3(from.dx*2.1,0,from.dz*2.1));
+    const side=out.clone().add(new THREE.Vector3(-from.dz*1.8,0,from.dx*1.8));
+    if(waterLane(from.water,out)&&waterLane(out,side)&&waterLane(side,from.water)){
+      return {source,destination:source,from,to:from,waterPath:[out,side,from.water]};
+    }
+  }
+  return null;
+}
+function startPenguinSwim(model){
+  if(!model.g.visible||isTraveling(model)||model.mode==='act')return false;
+  const source=homeIslet(model)||null;
+  if([...penguinSwims.values()].some(swim=>swim.source===source||swim.destination===source))return false;
+  const plan=planPenguinSwim(model);
+  if(!plan)return false;
+  resetResidentRoaming(model);
+  resetLandRoute(model,plan.from.bank);
+  penguinSwims.set(model,{...plan,phase:'approach',elapsed:0,segment:0,submerged:false,airStart:new THREE.Vector3(),bubbleTime:0});
+  return true;
+}
+function finishPenguinSwim(model,swim,time){
+  const id=model.g.userData.journalId;
+  if(swim.source!==swim.destination){
+    finishIslandVisit(id);
+    if(swim.destination){
+      const islet=swim.destination,slot=freeVisitSlot(islet);
+      islet.visitors.add(id);
+      islandVisits.set(id,{islet,slot,pos:model.g.position.clone(),home:model.spawnPoint.clone(),
+        phase:'rest',distance:islet.end,until:time+72+slot*8,rotation:model.g.rotation.y});
+    }
+  }
+  penguinSwims.delete(model);
+  model.blob.visible=true;
+  model.nextSwim=time+rnd(48,90);
+  resetResidentRoaming(model);
+}
+function findAlternateLanding(model,swim){
+  const {destination}=swim;
+  const pos=model.g.position;
+  const direction=Math.atan2(pos.z-(destination?.area.z||0),pos.x-(destination?.area.x||0));
+  for(const offset of coastOffsets){
+    const port=coastPort(model,destination,direction+offset);
+    if(port&&landClear(model,port.bank.x,port.bank.z)&&waterLane(pos,port.water)){
+      swim.to=port;swim.waterPath=[port.water];swim.segment=0;swim.elapsed=0;swim.phase='water';
+      return;
+    }
+  }
+  swim.elapsed=1.75;
+}
+function updatePenguinSwims(time,dt){
+  if(time>=nextPenguinSwim){
+    nextPenguinSwim=time+rnd(8,14);
+    const candidates=penguins.filter(model=>model.g.visible&&model.mode==='idle'&&!isTraveling(model)
+      &&!model.prayerEnds&&time>=(model.nextSwim||0));
+    candidates.sort((a,b)=>(a.nextSwim||0)-(b.nextSwim||0));
+    for(const model of candidates.slice(0,3)){
+      if(startPenguinSwim(model))break;
+      model.nextSwim=time+rnd(6,14);
+    }
+  }
+  for(const [model,swim] of penguinSwims){
+    const g=model.g,pos=g.position,{from,to}=swim;
+    const giveUp=()=>{
+      penguinSwims.delete(model);model.nextSwim=time+rnd(15,24);resetResidentRoaming(model);
+    };
+    const turn=(dx,dz)=>{if(Math.hypot(dx,dz)>.001)g.rotation.y=angLerp(g.rotation.y,Math.atan2(dx,dz),Math.min(1,dt*7))};
+    swim.elapsed+=dt;
+    if(swim.phase==='approach'){
+      const x=pos.x,z=pos.z,dx=from.bank.x-x,dz=from.bank.z-z,distance=Math.hypot(dx,dz);
+      if(distance<.22){
+        swim.phase='dive';swim.elapsed=0;swim.airStart.copy(pos);
+      }else{
+        const step=Math.min(distance,dt*.94)/distance;
+        const moved=advanceOnLand(model,pos,dx*step,dz*step,dt,false,true);
+        if(moved)turn(pos.x-x,pos.z-z);
+        pos.y=H(pos.x,pos.z);
+        walkTravelPose(model,time,dt,moved);
+        measureLandProgress(model,Math.hypot(from.bank.x-pos.x,from.bank.z-pos.z),dt);
+        if(model.walkStall>3.8||swim.elapsed>15)giveUp();
+      }
+      continue;
+    }
+    if(swim.phase==='dive'||swim.phase==='land'){
+      const diving=swim.phase==='dive',end=diving?from.water:to.bank;
+      const u=Math.min(1,swim.elapsed/(diving?1.3:1.5));
+      const previousY=pos.y;
+      pos.lerpVectors(swim.airStart,end,u);
+      pos.y+=Math.sin(Math.PI*u)*(.85+(diving?.14:.32));
+      if(pos.y>.15&&!landClear(model,pos.x,pos.z)){
+        if(diving){pos.copy(swim.airStart);giveUp()}
+        else{pos.copy(to.water);swim.phase='wait';swim.elapsed=0;swim.submerged=true}
+        continue;
+      }
+      turn(end.x-swim.airStart.x,end.z-swim.airStart.z);
+      model.inner.rotation.set(diving?1.15*u:1.05*(1-u),0,0);
+      model.blob.visible=false;
+      swim.submerged=pos.y<0;
+      if((previousY<0)!==(pos.y<0))splash(pos.x,0,pos.z,9,1.65,.72);
+      if(u===1){
+        if(diving){swim.phase='water';swim.elapsed=0}
+        else finishPenguinSwim(model,swim,time);
+      }
+      continue;
+    }
+    if(swim.phase==='water'){
+      const end=swim.waterPath[swim.segment],dx=end.x-pos.x,dz=end.z-pos.z,distance=Math.hypot(dx,dz);
+      const step=distance?Math.min(distance,dt*2.15)/distance:0;
+      pos.x+=dx*step;pos.z+=dz*step;
+      turn(dx,dz);
+      if(distance<.06&&++swim.segment===swim.waterPath.length){swim.phase='wait';swim.elapsed=0}
+    }else if(swim.elapsed>.22&&landClear(model,to.bank.x,to.bank.z)){
+      swim.phase='land';swim.elapsed=0;swim.airStart.copy(pos);
+    }else if(swim.elapsed>2.5)findAlternateLanding(model,swim);
+    swim.submerged=true;
+    pos.y=swimWaterline+Math.sin(time*3.4)*.12;
+    model.blob.visible=false;
+    model.inner.rotation.set(1.35+Math.sin(time*4.7)*.06,0,Math.sin(time*3.5)*.055);
+    model.flips.forEach((flipper,index)=>{
+      flipper.rotation.set(.2+Math.sin(time*8.6+index*.4)*.35,0,(index?1:-1)*(.8+Math.sin(time*8.6)*.44));
+    });
+    swim.bubbleTime-=dt;
+    if(swim.bubbleTime<=0){spawnBubbles(pos,1,.25);swim.bubbleTime=.34}
+  }
+}
 function seedIslandResidents(openIslets){
   const land=[...residents.values()].filter(({model})=>model.collisionRadius);
   let remaining=Math.floor(land.length*2/3)-islandVisits.size;
-  const available=land.filter(({entry})=>!islandVisits.has(entry.id));
+  const available=land.filter(({entry,model})=>!islandVisits.has(entry.id)&&!isTraveling(model))
+    .sort((a,b)=>Number(a.model.g.visible)-Number(b.model.g.visible));
   // Start with one animal on each island before assigning a second.
   for(let slot=0;slot<4&&remaining>0;slot++){
     for(const islet of openIslets){
       if(remaining<=0)break;
-      const spot=islandVisitSpot(islet,slot);
-      const index=available.findIndex(({model})=>landStep(model,spot.x,spot.y,true));
+      if(islet.visitors.size>slot)continue;
+      const index=available.findIndex(resident=>settleOnIslet(resident,islet));
       if(index<0)continue;
-      const [{entry,model}]=available.splice(index,1);
-      const pos=model.g.position,home=model.g.visible?pos.clone():model.spawnPoint.clone();
-      const lift=entry.species==='bear'?.09:entry.species==='seal'?.02:0;
-      pos.set(spot.x,H(spot.x,spot.y),spot.y);
-      islet.visitors.add(entry.id);
-      islandVisits.set(entry.id,{islet,slot,pos:pos.clone(),home,phase:'rest',
-        distance:islet.end,until:worldTime+45+slot*12+territoryScenery.indexOf(islet)*5,
-        blocked:0,rotation:model.g.rotation.y});
-      pos.y+=lift;
-      model.g.visible=true;
+      available.splice(index,1);
       remaining--;
     }
   }
@@ -5623,9 +6092,10 @@ function seedIslandResidents(openIslets){
 function updateIslandVisits(time,dt){
   if(time>=nextIslandVisit){
     nextIslandVisit=time+1.5;
-    const open=territoryScenery.filter(islet=>islet.group.visible&&!islet.crossing&&islet.visitors.size<ISLET_CAPACITY);
+    const open=openIsletsWithRoom().filter(islet=>!islet.crossing);
     const candidates=[...residents.values()].filter(({entry})=>
-      ['penguin','seal','bear'].includes(entry.species)&&!islandVisits.has(entry.id)&&residents.get(entry.id).model.g.visible);
+      ['penguin','seal','bear'].includes(entry.species)&&!islandVisits.has(entry.id)&&
+      !isTraveling(residents.get(entry.id).model)&&residents.get(entry.id).model.g.visible);
     const targetAway=Math.ceil((candidates.length+islandVisits.size)*2/3);
     if(open.length&&candidates.length&&islandVisits.size<targetAway){
       const islet=open[visitIslandIndex++%open.length];
@@ -5636,13 +6106,13 @@ function updateIslandVisits(time,dt){
       resident.lastIslandTrip=time;
       const {entry,model}=resident;
       if(!islet.crossing&&islet.visitors.size<ISLET_CAPACITY){
-        const occupied=new Set([...islet.visitors].map(id=>islandVisits.get(id).slot));
-        let slot=0;
-        while(occupied.has(slot))slot++;
+        const slot=freeVisitSlot(islet);
         const pos=model.g.position.clone();
         islet.visitors.add(entry.id);
         islet.crossing=entry.id;
-        islandVisits.set(entry.id,{islet,slot,pos,home:pos.clone(),phase:'approach',distance:islet.start,until:0,blocked:0,rotation:model.g.rotation.y});
+        islandVisits.set(entry.id,{islet,slot,pos,home:pos.clone(),phase:'approach',distance:islet.start,until:0,rotation:model.g.rotation.y});
+        resetResidentRoaming(model);
+        resetLandRoute(model,{x:direction.x*start,z:direction.y*start});
       }
     }
   }
@@ -5656,11 +6126,24 @@ function updateIslandVisits(time,dt){
       if(length<.035){model.detourTime=0;return true;}
       const step=Math.min(length,speed*dt);
       const x0=pos.x,z0=pos.z;
-      if(!advanceOnLand(model,pos,dx/length*step,dz/length*step,dt,true))return false;
-      const heading=Math.atan2(pos.x-x0,pos.z-z0);
-      visit.rotation=angLerp(visit.rotation,heading,Math.min(1,dt*8));
-      return Math.hypot(x-pos.x,z-pos.z)<.035;
+      if(advanceOnLand(model,pos,dx/length*step,dz/length*step,dt,true)){
+        const heading=Math.atan2(pos.x-x0,pos.z-z0);
+        visit.rotation=angLerp(visit.rotation,heading,Math.min(1,dt*8));
+      }
+      const remaining=Math.hypot(x-pos.x,z-pos.z);
+      measureLandProgress(model,remaining,dt);
+      return remaining<.035;
     };
+    if(visit.phase==='rest'){
+      if(penguinSwims.has(model))continue;
+      pos.copy(g.position);
+      if(time<visit.until||islet.crossing||mainLandLoad()>=MAIN_LAND_BUDGET+expandedShoreCount*5+2)continue;
+      islet.crossing=id;
+      visit.phase='return';
+      visit.rotation=g.rotation.y;
+      resetResidentRoaming(model);
+      resetLandRoute(model,{x:direction.x*end,z:direction.y*end});
+    }
     let raised=false;
     if(visit.phase==='approach'){
       if(moveTo(direction.x*start,direction.y*start))visit.phase='out';
@@ -5673,19 +6156,26 @@ function updateIslandVisits(time,dt){
       raised=true;
       if(outbound&&visit.distance===end){
         visit.phase='explore';
+        resetLandRoute(model,{x:destination.x,z:destination.y});
       }else if(!outbound&&visit.distance===start){
         islet.crossing=null;visit.phase='home';
+        resetLandRoute(model,visit.home);
       }
     }else if(visit.phase==='home'){
-      if(moveTo(visit.home.x,visit.home.z))finishIslandVisit(id);
-    }else if(visit.phase==='explore'){
-      if(moveTo(destination.x,destination.y)){
-        visit.phase='rest';visit.until=time+90+slot*7;
+      if(moveTo(visit.home.x,visit.home.z)||model.walkStall>BRIDGE_WAIT_TIME){
+        finishIslandVisit(id);resetResidentRoaming(model);
       }
-    }else if(visit.phase==='rest'&&time>=visit.until&&!islet.crossing){
-      islet.crossing=id;visit.phase='return';
+    }else if(visit.phase==='explore'){
+      if(moveTo(destination.x,destination.y)||model.walkStall>BRIDGE_WAIT_TIME){
+        visit.phase='rest';visit.until=time+90+slot*7;
+        resetResidentRoaming(model);
+      }
     }else if(visit.phase==='return'){
       if(moveTo(direction.x*end,direction.y*end)){visit.distance=end;visit.phase='back'}
+      else if(model.walkStall>BRIDGE_WAIT_TIME){
+        islet.crossing=null;visit.phase='rest';visit.until=time+12+slot*2;
+        resetResidentRoaming(model);
+      }
     }
     const lift=entry.species==='bear'?.09:entry.species==='seal'?.02:0;
     if(!raised)pos.y=H(pos.x,pos.z);
@@ -5694,21 +6184,14 @@ function updateIslandVisits(time,dt){
       &&Math.hypot(pos.x-direction.x*end,pos.z-direction.y*end)>model.collisionRadius*.85){
       islet.crossing=null;
     }
-    if(visit.phase==='approach'&&(!moving||model.blockedFor>0)){
-      visit.blocked+=dt;
-      if(visit.blocked>BRIDGE_WAIT_TIME){
-        model.detourTime=0;model.blockedFor=0;
-        finishIslandVisit(id);
-      }
-    }else visit.blocked=0;
+    if(visit.phase==='approach'&&model.walkStall>BRIDGE_WAIT_TIME){
+      finishIslandVisit(id);resetResidentRoaming(model);
+    }
     if(visit.phase==='rest'&&islet.crossing===id)islet.crossing=null;
     g.position.copy(pos);
     g.position.y+=lift+(moving?Math.abs(Math.sin(time*7))* .04:0);
     g.rotation.y=visit.rotation;
-    model.companion?.animate(time,dt,moving);
-    if(moving&&model.feet)model.feet.forEach((foot,index)=>{foot.position.z=.22+Math.sin(time*7+index*Math.PI)*.085});
-    if(moving&&model.front)model.front.forEach((fin,index)=>{fin.rotation.x=Math.sin(time*7+index*Math.PI)*.25});
-    if(moving&&model.legs)model.legs.forEach((leg,index)=>{leg.rotation.x=Math.sin(time*7+((index===0||index===3)?0:Math.PI))*.25});
+    walkTravelPose(model,time,dt,moving);
   }
 }
 const sealIce=floe(-11,15.5,2.7),bearIce=floe(5.5,17.5,4.2);
@@ -5722,45 +6205,52 @@ function buoy(x,z,color){
 }
 const dolphinBuoys=[buoy(15.5,16,'#568f9d'),buoy(21,11,'#568f9d')];
 const whaleBuoys=[buoy(-23,19,'#bd704e'),buoy(-27,14,'#bd704e')];
-const sharedGeometry=new Set([FOOT,BLOB_GEO]),sharedMaterial=new Set([A_EYE,BLOB_MAT]);
+const sharedGeometry=new Set([FOOT,BLOB_GEO,crownGeometry]),sharedMaterial=new Set([A_EYE,BLOB_MAT,crownMaterial]);
 const seaKinds=new Set(['dolphin','whale','orca','beluga','narwhal']);
 let tracking=null,fly=null,worldTime=0;
 const ray=new THREE.Raycaster(),pointer=new THREE.Vector2(),worldPoint=new THREE.Vector3();
 const pointers=new Set();
 let press=null;
 
-// Both routes stay on the original island. Floaters remain scenery.
 function shorePatrol(model,index,phase,kind){
   const bear=kind==='bear',centerX=bear?3.7:-3.4,centerZ=bear?3.7:5.2;
   const lane=.72+(index%4)*.15;
   const rx=(bear?2.65:2.15)*lane,rz=(bear?1.75:1.5)*lane;
-  let angle=phase,blocked=0,turn=1;
+  let pause=0;
   return (dt,moving)=>{
-    const pos=model.g.position, nextAngle=angle+turn*dt*(bear?.26:.31);
+    const pos=model.g.position;
+    let stepped=false;
     if(dt===0){
-      pos.set(centerX+Math.cos(angle)*rx,0,centerZ+Math.sin(angle)*rz);
+      pos.set(centerX+Math.cos(phase)*rx,0,centerZ+Math.sin(phase)*rz);
+      model.g.rotation.y=Math.atan2(-Math.sin(phase)*rx,Math.cos(phase)*rz);
     }else if(moving){
-      const dx=centerX+Math.cos(nextAngle)*rx-pos.x,dz=centerZ+Math.sin(nextAngle)*rz-pos.z;
-      const distance=Math.hypot(dx,dz),step=Math.min(distance,dt*(bear?.82:.74));
-      if(distance>.001){
-        if(advanceOnLand(model,pos,dx*step/distance,dz*step/distance,dt,true)){
-          if(Math.hypot(centerX+Math.cos(nextAngle)*rx-pos.x,centerZ+Math.sin(nextAngle)*rz)<.18){
-            angle=nextAngle;blocked=0;
-          }else blocked+=dt;
-        }else blocked+=dt;
-        if(blocked>2.4){
-          angle=Math.atan2((pos.z-centerZ)/rz,(pos.x-centerX)/rx);
-          turn=-turn;blocked=0;
+      pause-=dt;
+      if(!model.patrolTarget&&pause<=0){
+        model.patrolTarget=roamingTarget(model);
+        if(model.patrolTarget)resetLandRoute(model,model.patrolTarget);
+        else pause=rnd(.5,1.3);
+      }
+      const target=model.patrolTarget;
+      if(target){
+        const x=pos.x,z=pos.z,dx=target.x-x,dz=target.z-z,distance=Math.hypot(dx,dz);
+        if(distance>.15){
+          const step=Math.min(distance,dt*(bear?.84:.79))/distance;
+          stepped=advanceOnLand(model,pos,dx*step,dz*step,dt,false,true);
+          if(stepped)model.g.rotation.y=angLerp(model.g.rotation.y,Math.atan2(pos.x-x,pos.z-z),Math.min(1,dt*5));
+          measureLandProgress(model,Math.hypot(target.x-pos.x,target.z-pos.z),dt);
+        }
+        if(distance<=.15||model.walkStall>2.1){
+          model.patrolTarget=null;
+          pause=rnd(.35,.95);
         }
       }
     }
     pos.y=H(pos.x,pos.z)+(bear?.09:.02);
-    const heading=Math.atan2(-Math.sin(angle)*rx,Math.cos(angle)*rz);
-    model.g.rotation.y=dt?angLerp(model.g.rotation.y,heading,Math.min(1,dt*5)):heading;
+    return stepped;
   };
 }
 
-function birth(entry,index){
+function birth(entry,index,queueArrival){
   const id=entry.id;
   const phase=index*2.399963;
   const resident={entry,index};
@@ -5813,13 +6303,20 @@ function birth(entry,index){
     model.collisionRadius=landRadius[entry.species]||(entry.outfit?.94:.73);
     model.avoidSide=index%2===0?1:-1;
     model.spawnPoint=model.g.position.clone();
-    model.g.visible=placeLandResident(model,model.spawnPoint);
+    model.g.visible=false;
+    if(queueArrival)queuePierArrival(resident);
+    else model.g.visible=placeResidentOnLand(resident);
   }
   residents.set(id,resident);
+  residentCrown(resident);
 }
 function retire(id,resident){
   finishIslandVisit(id);
   const model=resident.model;
+  pierArrivals.delete(id);
+  penguinSwims.delete(model);
+  if(activePierArrival===id)activePierArrival=null;
+  if(welcomeFocusId===id)welcomeFocusId=null;
   model.g.parent?.remove(model.g);
   const index=penguins.indexOf(model);
   if(index!==-1) penguins.splice(index,1);
@@ -5909,30 +6406,66 @@ function archipelagoOverview(){
 Archipelago.bind({show:showNeighbors,overview:archipelagoOverview});
 
 function syncResidents(state){
+  const now=Date.now(),newScope=arrivalScope!==state.arrivalScope;
+  lastResidentState=state;
+  updateCrownDay(now);
+  if(newScope){
+    arrivalScope=state.arrivalScope;arrivalScopeStarted=now;
+    arrivalsSeen.clear();
+    visiblePersonalResidents.clear();
+  }
   syncGratitudeFish(state.gratitude||[]);
   AngerSharks.sync(state.anger||[]);
-  rebuildTerrain(GRACE_PREVIEW_UNLOCK_ALL&&!state.sharedGroup ? Infinity : state.total);
+  const entries=displayedResidents(state);
+  const landDemand=entries.reduce((load,entry)=>load+
+    (landRadius[entry.species]?landWeight(landRadius[entry.species]):entry.species==='penguin'?1:0),0);
+  rebuildTerrain(GRACE_PREVIEW_UNLOCK_ALL&&!state.sharedGroup ? Infinity : state.total,landDemand);
   const newlyOpened=territoryScenery.filter((islet,index)=>!islet.group.visible&&terrainTotal>=TERRITORIES[index].at);
   territoryScenery.forEach((islet,index)=>{islet.group.visible=terrainTotal>=TERRITORIES[index].at});
-  const wanted=new Map(state.entries.map(entry=>[entry.id,entry]));
+  const wanted=new Map(entries.map(entry=>[entry.id,entry]));
   for(const [id,resident] of residents){
     const entry=wanted.get(id);
     if(!entry||entry.species!==resident.entry.species||entry.variant!==resident.entry.variant||entry.outfit!==resident.entry.outfit)retire(id,resident);
+    else{
+      resident.entry=entry;
+      residentCrown(resident);
+      const swim=penguinSwims.get(resident.model);
+      const removedSwimIsland=[swim?.source,swim?.destination].some(islet=>islet&&!islet.group.visible);
+      if(removedSwimIsland||newScope&&(pierArrivals.has(id)||swim)){
+        pierArrivals.delete(id);penguinSwims.delete(resident.model);
+        if(activePierArrival===id)activePierArrival=null;
+        if(welcomeFocusId===id)welcomeFocusId=null;
+        finishIslandVisit(id);resetResidentRoaming(resident.model);
+        resident.model.g.visible=placeResidentOnLand(resident);
+      }
+    }
+  }
+  for(const [id,resident] of residents){
+    const {model}=resident;
+    if(!model.collisionRadius||!model.g.visible||pierArrivals.has(id)||penguinSwims.has(model))continue;
+    const visit=islandVisits.get(id);
+    if(visit?visit.islet.group.visible:roamingGround(null,model.g.position.x,model.g.position.z))continue;
+    finishIslandVisit(id);
+    resetResidentRoaming(model);
+    model.g.visible=false;
+    model.g.visible=placeResidentOnLand(resident);
   }
   const slots=new Map();
   for(const {entry,index} of residents.values()){
     if(!slots.has(entry.species))slots.set(entry.species,new Set());
     slots.get(entry.species).add(index);
   }
-  for(const entry of state.entries){
+  for(const entry of entries){
     if(residents.has(entry.id))continue;
     if(!slots.has(entry.species))slots.set(entry.species,new Set());
     const occupied=slots.get(entry.species);
     let index=0;
     while(occupied.has(index))index++;
     occupied.add(index);
-    birth(entry,index);
+    const queueArrival=Boolean(state.arrivalScope)&&!newScope&&!arrivalsSeen.has(entry.id)&&entry.bornAt>=arrivalScopeStarted;
+    birth(entry,index,queueArrival);
   }
+  for(const entry of state.entries)arrivalsSeen.add(entry.id);
   if(newlyOpened.length)seedIslandResidents(newlyOpened);
   const present=new Set(state.entries.map(entry=>entry.species));
   sealIce.visible=state.total>=2||present.has('seal');
@@ -6014,6 +6547,13 @@ function focusGratitude(id,follow=false,fromJournal=false){
   moveCamera(target.clone().add(offset),target,reduce?.2:1);
 }
 function focusResident(id,follow=false,fromJournal=false){
+  if(!residents.has(id)&&lastResidentState?.personalIsland){
+    const entry=lastResidentState.entries.find(item=>item.id===id);
+    if(entry&&landRadius[entry.species]){
+      visiblePersonalResidents.set(entry.species,id);
+      syncResidents(lastResidentState);
+    }
+  }
   if(!residents.get(id)?.model.g.visible)return;
   beginAnimalFocus(follow,fromJournal);
   tracking=id;
@@ -6146,6 +6686,10 @@ const goldenBubbles=Array.from({length:28},(_,index)=>{
 let celebrationKind='',celebrationId='',celebrationAge=0;
 celebration.visible=false;
 function celebrate(kind,id){
+  if(kind==='journal'&&pierArrivals.has(id)&&activePierArrival!==id){
+    pierArrivals.get(id).celebrate=true;
+    return;
+  }
   celebrationKind=kind;
   celebrationId=id;
   celebrationAge=0;
@@ -6186,7 +6730,7 @@ function angLerp(a,b,t){let d=((b-a+Math.PI)%(Math.PI*2)+Math.PI*2)%(Math.PI*2)-
 // The pier visitor is scenery, with no journal or wardrobe entry.
 const prayerSpecies=Object.keys(SPECIES);
 const prayerVisitors=new Map();
-const prayerPlank=pier.children.filter(mesh=>mesh.geometry.parameters.width===1.8).at(-5);
+const prayerPlank=pier.children.filter(mesh=>mesh.geometry.parameters.width===pierWidth).at(-5);
 let prayerSpeciesIndex=0,pierPrayerVisitor=null;
 let nextPierPrayer=rnd(20,30),pierPrayerStarted=0,pierPrayerEnds=0;
 const pierPrayerNotice=document.getElementById('pier-prayer-notice');
@@ -6225,7 +6769,7 @@ function updatePierPrayer(time){
     nextPierPrayer=time+rnd(20,30);
     prayerCloudStarted=time;
   }
-  if(!pierPrayerVisitor&&time>=nextPierPrayer){
+  if(!pierPrayerVisitor&&time>=nextPierPrayer&&!activePierArrival&&!pierArrivals.size){
     const type=prayerSpecies[prayerSpeciesIndex++%prayerSpecies.length];
     if(!prayerVisitors.has(type)){
       const visitor=buildPenguin(type);
@@ -6264,6 +6808,7 @@ function updatePierPrayer(time){
 let renderedCameraHeight=camera.position.y;
 function tick(){
   const elapsed=Math.min(clock.getDelta(),.05),dt=elapsed*(reduce?.35:1),t=worldTime+=dt,k=Math.min(1,elapsed*2);
+  updateCrownDay();
   uwV+=(smooth(-.5,.08,-renderedCameraHeight)-uwV)*Math.min(1,elapsed*9);
   skyCur.lerp(tmpC.set(target.sky),k);scene.background.copy(skyCur);scene.fog.color.copy(skyCur);skyMat.uniforms.bot.value.copy(skyCur);skyMat.uniforms.top.value.lerp(tmpC.set(target.top),k);
   sun.color.lerp(tmpC.set(target.sun),k);sun.intensity+=(target.si-sun.intensity)*k;
@@ -6278,34 +6823,34 @@ function tick(){
   scene.fog.far=visitingArchipelago?260:THREE.MathUtils.lerp(95,78,uwV);
   skyDome.visible=stars.visible=uwV<.5;if(uwV>=.5)auroras.forEach(a=>a.visible=false);
   water.material.opacity=.84-.50*uwV;
-  const wp=waterGeo.attributes.position;
-  for(let i=0;i<wp.count;i++){const x=wBase[i*3],z=wBase[i*3+2];wp.setY(i,Math.sin(x*.25+t*1.1)*.08+Math.cos(z*.3+t*.9)*.07+Math.sin((x+z)*.6+t*2)*.03)}
-  wp.needsUpdate=true;waterGeo.computeVertexNormals();
+  waveTime.value=t;
   floaters.forEach(f=>{f.m.position.y=f.y+Math.sin(t*.8+f.ph)*f.a;f.m.rotation.z=Math.sin(t*.6+f.ph)*.02});
   const fp=flag.f.geometry.attributes.position;for(let i=0;i<fp.count;i++){const x=flag.base[i*3];fp.setZ(i,Math.sin(x*4-t*5)*.12*x)}fp.needsUpdate=true;flag.f.geometry.computeVertexNormals();
   if(snow.visible){const sp=snow.geometry.attributes.position;for(let i=0;i<sp.count;i++){let y=sp.getY(i)-dt*(1.1+(i%5)*.2);if(y<0)y=30;sp.setY(i,y);sp.setX(i,sp.getX(i)+Math.sin(t+i)*dt*.3)}sp.needsUpdate=true}
   penguins.forEach(p=>{
-    if(!p.g.visible||islandVisits.has(p.g.userData.journalId))return;
+    if(!p.g.visible||isTraveling(p))return;
     const g=p.g,ph=t*8+p.ph;
     const pos=g.position,previousX=pos.x,previousZ=pos.z;
     let moving=false;const P={rx:0,rz:0,ry:0,lift:0,lz:0,hop:0,fl:null,ftx:0,eye:1,feetX:0,br:1};
     if(p.mode==='idle'&&!(p.prayerEnds>t)){p.timer-=dt;if(p.timer<=0)chooseNext(p)}
     if(p.mode==='walk'){const d=p.target.clone().sub(pos);d.y=0;const L=d.length();
       if(L<.2){p.mode='idle';p.timer=rnd(1,3.5)}
-      else{moving=true;d.normalize();const sp=(p.type==='chick'?.8:.65)*dt;pos.x+=d.x*sp;pos.z+=d.z*sp;g.rotation.y=angLerp(g.rotation.y,Math.atan2(d.x,d.z),dt*4);
-        if(p.jy===0&&Math.random()<dt*.012){startAct(p,'fall');moving=false}}}
+      else{moving=true;d.normalize();const sp=Math.min(L,(p.type==='chick'?.8:.65)*dt);pos.x+=d.x*sp;pos.z+=d.z*sp}}
+    const beforeHeading=g.rotation.y, sliding=p.act?.kind==='slide';
     if(p.mode==='act')runAct(p,P,t,dt);
     const dx=pos.x-previousX,dz=pos.z-previousZ;
     if(dx||dz){
       pos.x=previousX;pos.z=previousZ;
-      const stepped=advanceOnLand(p,pos,dx,dz,dt,true);
+      const stepped=advanceOnLand(p,pos,dx,dz,dt,false,true);
       moving=moving&&stepped;
-      if(stepped&&p.mode==='walk'){
-        g.rotation.y=angLerp(g.rotation.y,Math.atan2(pos.x-previousX,pos.z-previousZ),Math.min(1,dt*9));
+      if(p.mode==='walk'||sliding){
+        g.rotation.y=stepped?angLerp(beforeHeading,Math.atan2(pos.x-previousX,pos.z-previousZ),Math.min(1,dt*6)):beforeHeading;
       }
-      p.stuck=p.blockedFor>0?p.stuck+dt:0;
-      if(p.mode==='walk'&&p.stuck>2){
-        p.target=landPoint(p.rad);p.stuck=0;p.blockedFor=0;
+      if(sliding)p.stuck=stepped?0:p.stuck+dt;
+      if(p.mode==='walk'){
+        measureLandProgress(p,Math.hypot(p.target.x-pos.x,p.target.z-pos.z),dt);
+        if(p.walkStall>2.2){p.mode='idle';p.timer=rnd(.55,1.5);p.detourTime=0}
+        else if(moving&&p.jy===0&&Math.random()<dt*.012)startAct(p,'fall');
       }
     }
     if(p.jy>0){p.vy-=18*dt;p.jy+=p.vy*dt;if(p.jy<=0){p.jy=0;p.vy=0}}
@@ -6356,8 +6901,13 @@ function tick(){
   });
   animals.forEach(f=>f(t,dt));
   admitWaitingResidents(t);
-  residents.forEach((item,id)=>{if(item.model.g.visible&&!islandVisits.has(id))item.animate?.(t,dt)});
+  residents.forEach(item=>{
+    if(item.model.g.visible&&!isTraveling(item.model))item.animate?.(t,dt);
+    if(item.model.g.visible)residentCrown(item);
+  });
   updateIslandVisits(t,dt);
+  updatePierArrivals(t,dt);
+  updatePenguinSwims(t,dt);
   updatePierPrayer(clock.elapsedTime);
   neighborAnimations.forEach(animate=>animate(t));
   followResident(elapsed);
@@ -6380,7 +6930,7 @@ function tick(){
   if(c.y!==renderedCameraHeight)camera.lookAt(controls.target);
   requestAnimationFrame(tick);
 }
-GraceIsland.connect({sync:syncResidents,focus:focusResident,focusGratitude,closePreview,celebrate,reset:resetView});
+GraceIsland.connect({sync:syncResidents,focus:focusResident,focusGratitude,closePreview,celebrate,reset:resetView,welcome:welcomeResident});
 tick();
 } catch (error) {
   console.error(error);
