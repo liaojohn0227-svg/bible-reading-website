@@ -1437,7 +1437,6 @@ function createPrivateJournal({empty,decode,readGuest,onAccount,onData,onStatus}
     const base=local.base;
     if(!base||!remote)return null;
     const data={...remote.data}, times=new Map(Object.entries({...local.times,...remote.times}));
-    let duplicateDevotions=0;
     const timestamp=(record,id)=>Object.hasOwn(record.times||{},id)?record.times[id]:0;
     for(const list of lists){
       const original=new Map(base.data[list].map(note=>[note.id,note]));
@@ -1450,7 +1449,6 @@ function createPrivateJournal({empty,decode,readGuest,onAccount,onData,onStatus}
         const leftTime=timestamp(local,id), rightTime=timestamp(remote,id);
         let useLocal=localChanged&&!remoteChanged;
         if(localChanged&&remoteChanged){
-          if(list==='entries'&&!start&&left&&right)duplicateDevotions++;
           if(left?.groupId||right?.groupId||start?.groupId){
             // Linked journal text and revision come from the group transaction.
             useLocal=false;
@@ -1472,7 +1470,8 @@ function createPrivateJournal({empty,decode,readGuest,onAccount,onData,onStatus}
     const originalDevotions=new Set(base.data.entries.map(note=>note.id));
     const addedDevotions=record=>record.data.entries.some(note=>!originalDevotions.has(note.id));
     if(localDelta&&remoteDelta&&!addedDevotions(local)&&!addedDevotions(remote))return null;
-    data.total=Math.max(data.entries.length,base.data.total+localDelta+remoteDelta-duplicateDevotions);
+    // This value records the furthest unlocked milestone, not lifetime writes.
+    data.total=Math.max(data.entries.length,local.data.total,remote.data.total);
     const a=local.data.progress,b=remote.data.progress,prior=decode(base.data).progress;
     const wardrobe=progress=>[progress.outfits,progress.unlockedOutfits,progress.variantOutfits];
     if(!same(wardrobe(a),wardrobe(prior))&&!same(wardrobe(b),wardrobe(prior))&&!same(wardrobe(a),wardrobe(b)))return null;
@@ -1812,6 +1811,10 @@ const GraceIsland = (() => {
     return {groupId:entry.groupId,groupRevision:entry.groupRevision};
   }
   const islandState=()=>groupIsland?.snapshot ?? state;
+  const devotionProgress=(island=islandState())=>groupIsland?island.total:island.entries.length;
+  function devotionTotalAfterAdd(data,shared=false){
+    return shared?data.total+1:Math.max(data.total,data.entries.length+1);
+  }
   const previewUnlocked=()=>GRACE_PREVIEW_UNLOCK_ALL&&!groupIsland;
   function decodeProgress(progress,entries,gratitude) {
     if(progress===undefined)progress={days:[],outfits:entries.filter(entry=>entry.outfit).map(entry=>({target:entry.id,outfit:entry.outfit,legacy:true}))};
@@ -1912,8 +1915,9 @@ const GraceIsland = (() => {
     $('region-name').textContent=current?.name || '初雪灣';
     $('island-count').textContent=entries.length ? entries.length+' 位島上居民' : '島上還沒有居民';
     $('progress').max=next?.at || terrainMilestones.at(-1).at;
-    $('progress').value=Math.min(total,$('progress').max);
-    $('next-region').textContent=next ? '累積 '+next.at+' 篇，島嶼擴張至'+next.name+'。' : '四片新地形已全部開放。';
+    const currentCount=devotionProgress();
+    $('progress').value=Math.min(currentCount,$('progress').max);
+    $('next-region').textContent=next ? '靈修 '+currentCount+' / '+next.at+' 篇，島嶼擴張至'+next.name+'。' : '四片新地形已全部開放。';
     if(terrainProgress===Infinity)$('next-region').textContent='全解鎖試玩中 · 動物、造型和地形已開放。';
     const nextAnimal=unlockOrder[unlockedCards(total,!groupIsland).length];
     if(nextAnimal)$('next-region').textContent+=' 第 '+(unlockedCards(total,!groupIsland).length*3)+' 篇解鎖'+cardById.get(nextAnimal).name+'。';
@@ -2285,6 +2289,7 @@ const GraceIsland = (() => {
       const data = Object.fromEntries(Array.from(new FormData(form),([field,value]) => [field,value.trim()]));
       if (!data.body) return showError(error,Error('請寫下一些靈修心得。'));
       const previousCredit=outfitCredit(state.progress);
+      const previousUnlockCount=unlockedCards(islandState().total,!groupIsland).length;
       let saved;
       try {
         await commitRecord('journal',current => {
@@ -2297,7 +2302,7 @@ const GraceIsland = (() => {
           }
           saved=current.entries.find(item=>item.id===id);
           if(saved)return current;
-          const total = current.total + 1;
+          const total = devotionTotalAfterAdd(current,Boolean(groupIsland));
           const animal=unlockedCards(current.total,!groupIsland).find(card=>card.id===animalChoice.value);
           if(!animal)throw Error('這種動物尚未解鎖，請重新開啟表單。');
           if(speciesFull(animal,current,Boolean(groupIsland)))throw Error(animal.name+'已達個人島的 3 隻上限，請選擇其他動物。');
@@ -2311,8 +2316,9 @@ const GraceIsland = (() => {
       } catch (problem) {return showError(error,problem)}
       panel.close();
       if (!entry){stage?.welcome?.(saved.id);stage?.celebrate?.('journal',saved.id);}
-      const unlocked=!previewUnlocked()&&!entry&&islandState().total%3===0 ? unlockOrder[islandState().total/3] : null;
-      notify(entry ? '靈修已更新。' : nameOf(saved)+'來到島上了！'+(unlocked?' 已解鎖'+cardById.get(unlocked).name+'。':'')+outfitReminder('journal',previousCredit));
+      const cards=unlockedCards(islandState().total,!groupIsland);
+      const unlocked=!entry&&cards.length>previousUnlockCount?cards.at(-1):null;
+      notify(entry ? '靈修已更新。' : nameOf(saved)+'來到島上了！'+(unlocked?' 已解鎖'+unlocked.name+'。':'')+outfitReminder('journal',previousCredit));
     };
     show(entry ? '編輯靈修' : '寫下今天的靈修',form,entry ? 'edit' : 'new');
     form.elements.body.focus();
@@ -2361,9 +2367,9 @@ const GraceIsland = (() => {
       })}
       catch (problem) {return showError(error,problem)}
       journal();
-      notify('已刪除靈修與對應的動物。');
+      notify('已刪除靈修與對應的動物，個人島進度扣除 1 篇。');
     }),button('返回','soft',() => detail(entry.id)));
-    wrap.append(el('p','「' + titleOf(entry) + '」及對應的' + nameOf(entry) + '將一併移除。'+
+    wrap.append(el('p','「' + titleOf(entry) + '」及對應的' + nameOf(entry) + '將一併移除。個人島進度會少 1 篇，已解鎖的項目會保留。'+
       (entry.groupId?'這項變更會套用到個人島與小組島。':'')),error,actions);
     show('刪除這篇靈修？',wrap,'remove');
   }
@@ -2373,8 +2379,8 @@ const GraceIsland = (() => {
     list.append(section);
     return section;
   }
-  function progressItem(name,color,current,needed,unit,write,openLabel,openAction){
-    const open=previewUnlocked()||current>=needed;
+  function progressItem(name,color,current,needed,unit,write,openLabel,openAction,unlockedAt=current){
+    const open=previewUnlocked()||unlockedAt>=needed;
     const remaining=Math.max(0,needed-current);
     const status=open ? openLabel : current+'/'+needed+' '+unit+' · 還差 '+remaining+' '+unit;
     const card=row(name,status,color,open?'已開放':'未解鎖',open ? openAction : ()=>{
@@ -2396,7 +2402,8 @@ const GraceIsland = (() => {
     const overview=el('div',undefined,'unlock-overview');
     const nextAnimal=unlockOrder[unlockedCards(islandState().total,!groupIsland).length];
     const nextIsland=TERRAIN_MILESTONES.find(area=>area.at>islandState().total);
-    overview.append(el('strong','養成進度'),el('span','靈修 '+islandState().total+' 篇 · 感恩 '+islandState().gratitude.length+' 則'));
+    const currentCount=devotionProgress();
+    overview.append(el('strong','養成進度'),el('span','靈修 '+currentCount+' 篇 · 感恩 '+islandState().gratitude.length+' 則'));
     if(previewUnlocked())overview.append(el('small','全解鎖試玩中'));
     else if(nextAnimal||nextIsland){
       const next=[];
@@ -2410,12 +2417,12 @@ const GraceIsland = (() => {
     unlockOrder.forEach((id,index)=>{
       const card=cardById.get(id);
       const residents=islandState().entries.filter(entry=>entry.species===card.species&&entry.variant===card.variant);
-      animals.append(progressItem(card.name,card.color,islandState().total,index*3,'篇靈修',()=>formFor(),
-        card.region+' · 島上 '+residents.length+' 隻',()=>residentsFor(card,residents)));
+      animals.append(progressItem(card.name,card.color,currentCount,index*3,'篇靈修',()=>formFor(),
+        card.region+' · 島上 '+residents.length+' 隻',()=>residentsFor(card,residents),islandState().total));
     });
     const islands=guideSection(list,'島嶼地形','累積靈修後，新島會以木橋接到主島。');
     for(const area of TERRAIN_MILESTONES){
-      islands.append(progressItem(area.name,area.color,islandState().total,area.at,'篇靈修',()=>formFor(),'已連接主島'));
+      islands.append(progressItem(area.name,area.color,currentCount,area.at,'篇靈修',()=>formFor(),'已連接主島',undefined,islandState().total));
     }
     const fish=guideSection(list,'感恩之海','感恩獨立計算，每新增一則感恩，可選擇一種已開放的魚。');
     for(const [id,kind] of Object.entries(gratitudeFishKinds)){
