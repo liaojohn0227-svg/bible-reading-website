@@ -1473,13 +1473,15 @@ function createPrivateJournal({empty,decode,readGuest,onAccount,onData,onStatus}
     const addedDevotions=record=>record.data.entries.some(note=>!originalDevotions.has(note.id));
     if(localDelta&&remoteDelta&&!addedDevotions(local)&&!addedDevotions(remote))return null;
     data.total=Math.max(data.entries.length,base.data.total+localDelta+remoteDelta-duplicateDevotions);
-    const a=local.data.progress,b=remote.data.progress,prior=base.data.progress;
-    const wardrobe=progress=>[progress.outfits,progress.unlockedOutfits];
+    const a=local.data.progress,b=remote.data.progress,prior=decode(base.data).progress;
+    const wardrobe=progress=>[progress.outfits,progress.unlockedOutfits,progress.variantOutfits];
     if(!same(wardrobe(a),wardrobe(prior))&&!same(wardrobe(b),wardrobe(prior))&&!same(wardrobe(a),wardrobe(b)))return null;
     const outfits=same(wardrobe(a),wardrobe(prior))?b:a;
     data.progress={
       days:[...new Set([...a.days,...b.days])].sort(),
-      outfits:outfits.outfits,unlockedOutfits:outfits.unlockedOutfits
+      gratitudeDays:[...new Set([...a.gratitudeDays,...b.gratitudeDays])].sort(),
+      legacyOutfitCredits:Math.max(a.legacyOutfitCredits,b.legacyOutfitCredits),
+      outfits:outfits.outfits,unlockedOutfits:outfits.unlockedOutfits,variantOutfits:outfits.variantOutfits
     };
     return {data:decode(data),times:Object.fromEntries(times)};
   }
@@ -1752,7 +1754,9 @@ const GraceIsland = (() => {
     viewport.addEventListener('scroll',fitDialog);
     fitDialog();
   }
-  const empty = () => ({version:1,total:0,entries:[],gratitude:[],anger:[],progress:{days:[],outfits:[],unlockedOutfits:[]}});
+  const empty = () => ({version:1,total:0,entries:[],gratitude:[],anger:[],progress:{
+    days:[],gratitudeDays:[],outfits:[],unlockedOutfits:[],variantOutfits:[],legacyOutfitCredits:0
+  }});
   let state = empty(), stage, noticeTimer, route, routeNoteId, groupIsland;
 
   function validDate(date) {
@@ -1775,7 +1779,6 @@ const GraceIsland = (() => {
       const {id,date,title,scripture,body,species,variant} = entry;
       return {id,date,title,scripture,body,species,variant,outfit,...creationTime(entry),...noteLink(entry)};
     });
-    const progress=decodeProgress(value.progress,entries);
     const gratitude=value.gratitude===undefined?[]:value.gratitude;
     if(!Array.isArray(gratitude))throw Error('備份內的感恩紀錄格式不正確。');
     const gratitudeEntries=gratitude.map(entry=>{
@@ -1795,6 +1798,7 @@ const GraceIsland = (() => {
       ids.add(entry.id);
       return {id:entry.id,date:entry.date,body:entry.body,level:entry.level,reflection,reflectedAt,released:entry.released===true,...creationTime(entry),...noteLink(entry)};
     });
+    const progress=decodeProgress(value.progress,entries,gratitudeEntries);
     return {version:1,total:value.total,entries,gratitude:gratitudeEntries,anger:angerEntries,progress};
   }
   function creationTime(entry){
@@ -1809,14 +1813,23 @@ const GraceIsland = (() => {
   }
   const islandState=()=>groupIsland?.snapshot ?? state;
   const previewUnlocked=()=>GRACE_PREVIEW_UNLOCK_ALL&&!groupIsland;
-  function decodeProgress(progress,entries) {
-    if(progress===undefined)return {
-      days:[],outfits:entries.filter(entry=>entry.outfit).map(entry=>({target:entry.id,outfit:entry.outfit,legacy:true})),unlockedOutfits:[]
-    };
+  function decodeProgress(progress,entries,gratitude) {
+    if(progress===undefined)progress={days:[],outfits:entries.filter(entry=>entry.outfit).map(entry=>({target:entry.id,outfit:entry.outfit,legacy:true}))};
     if(!progress||!Array.isArray(progress.days)||!Array.isArray(progress.outfits)){
       throw Error('備份內的圖鑑或造型進度不完整。');
     }
     const days=[...new Set(progress.days)].sort();
+    const storedGratitude=progress.gratitudeDays??[];
+    const variantOutfits=progress.variantOutfits??[];
+    if(!Array.isArray(storedGratitude)||storedGratitude.some(day=>!validDate(day))||!Array.isArray(variantOutfits)
+      ||variantOutfits.some(grant=>!grant||!Object.hasOwn(variants,grant.variant)||!grant.outfit||!Object.hasOwn(PENGUIN_OUTFITS,grant.outfit))){
+      throw Error('備份內有無效的每日造型進度。');
+    }
+    const gratitudeDays=[...new Set([...storedGratitude,...gratitude.map(note=>note.date)])].sort();
+    const grants=variantOutfits.map(({variant,outfit})=>({variant,outfit}));
+    if(new Set(grants.map(grant=>grant.variant+':'+grant.outfit)).size!==grants.length){
+      throw Error('備份內有重複的企鵝造型。');
+    }
     const unlocked=progress.unlockedOutfits??[];
     if(!Array.isArray(unlocked)||unlocked.some(id=>typeof id!=='string'||!id||!Object.hasOwn(PENGUIN_OUTFITS,id))){
       throw Error('備份內有無效的造型解鎖記錄。');
@@ -1830,20 +1843,37 @@ const GraceIsland = (() => {
       new Set(outfits.map(grant=>JSON.stringify([grant.target,grant.outfit]))).size!==outfits.length){
       throw Error('備份內有無效或重複的解鎖記錄。');
     }
-    return {days,outfits,unlockedOutfits:[...new Set(unlocked)]};
+    const legacyEarned=days.filter((day,index)=>index>0&&Date.parse(day)-Date.parse(days[index-1])===86400000).length;
+    const legacyOutfitCredits=progress.legacyOutfitCredits??Math.max(0,legacyEarned-outfits.filter(grant=>!grant.legacy).length-new Set(unlocked).size);
+    if(!Number.isSafeInteger(legacyOutfitCredits)||legacyOutfitCredits<0)throw Error('備份內有無效的造型機會。');
+    return {days,gratitudeDays,outfits,unlockedOutfits:[...new Set(unlocked)],variantOutfits:grants,legacyOutfitCredits};
   }
   function unlockedCards(total, allowPreview=true) {
     const count=GRACE_PREVIEW_UNLOCK_ALL&&allowPreview ? unlockOrder.length : 1+Math.floor(total/3);
     return unlockOrder.slice(0,count).map(id=>cardById.get(id));
   }
   function outfitCredit(progress) {
-    const days=progress.days;
-    const earned=days.filter((day,index)=>index>0&&Date.parse(day)-Date.parse(days[index-1])===86400000).length;
-    return Math.max(0,earned-progress.outfits.filter(grant=>!grant.legacy).length-(progress.unlockedOutfits?.length||0));
+    const gratitude=new Set(progress.gratitudeDays);
+    const earned=progress.days.filter(day=>gratitude.has(day)).length;
+    return Math.max(0,earned+progress.legacyOutfitCredits-progress.variantOutfits.length);
   }
-  function unlockedOutfits(progress,preview=false) {
+  function hasOutfitChoices(progress) {
+    const count=Object.keys(PENGUIN_OUTFITS).length-1;
+    return Object.keys(variants).some(variant=>unlockedOutfits(progress,false,variant).length<count);
+  }
+  function outfitReminder(kind,previousCredit) {
+    const progress=state.progress;
+    if(previewUnlocked()||!hasOutfitChoices(progress))return '';
+    if(outfitCredit(progress)>previousCredit)return ' 完成今日靈修＋感恩！到「圖鑑 → 我的企鵝造型」解鎖造型。';
+    const day=today(),didDevotion=progress.days.includes(day),didGratitude=progress.gratitudeDays.includes(day);
+    if(kind==='journal'&&didDevotion&&!didGratitude)return ' 今天再記一則感恩，就能獲得造型解鎖機會。';
+    if(kind==='gratitude'&&didGratitude&&!didDevotion)return ' 今天再寫一篇靈修，就能獲得造型解鎖機會。';
+    return '';
+  }
+  function unlockedOutfits(progress,preview=false,variant='') {
     if(preview)return Object.keys(PENGUIN_OUTFITS).filter(Boolean);
-    return [...new Set([...progress.outfits.map(grant=>grant.outfit),...(progress.unlockedOutfits||[])])];
+    return [...new Set([...progress.outfits.map(grant=>grant.outfit),...(progress.unlockedOutfits||[]),
+      ...(progress.variantOutfits||[]).filter(grant=>grant.variant===variant).map(grant=>grant.outfit)])];
   }
   function speciesFull(card,data,shared=false) {
     return !shared&&cappedSpecies.has(card.species)&&data.entries.filter(entry=>entry.species===card.species).length>=3;
@@ -1871,6 +1901,9 @@ const GraceIsland = (() => {
     else stage.sync({...state,personalIsland:true,arrivalScope:privateJournal.status.user?.id??'guest'});
   }
   function refresh() {
+    const reward=!previewUnlocked()&&outfitCredit(state.progress)>0&&hasOutfitChoices(state.progress);
+    $('guide').textContent=reward?'圖鑑 · 可解鎖':'圖鑑';
+    menuButton.textContent=reward?'☰ 選單 · 可解鎖':'☰ 選單';
     const {entries,total} = groupIsland?.snapshot ?? state;
     const terrainMilestones=TERRAIN_MILESTONES;
     const terrainProgress=GRACE_PREVIEW_UNLOCK_ALL&&!groupIsland ? Infinity : total;
@@ -1965,6 +1998,7 @@ const GraceIsland = (() => {
       event.preventDefault();
       const text=body.value.trim();
       if(!text)return showError(error,Error('請寫下一件感恩的事。'));
+      const previousCredit=outfitCredit(state.progress);
       let saved;
       try{
         await commitRecord('gratitude',current=>{
@@ -1982,11 +2016,11 @@ const GraceIsland = (() => {
           return {...current,gratitude:[...current.gratitude,saved]};
         });
       }catch(problem){return showError(error,problem)}
-      if(!entry&&stage){
-        panel.close();stage.focusGratitude(saved.id,true);stage.celebrate?.('gratitude',saved.id);
+      if(!entry){
+        panel.close();stage?.focusGratitude(saved.id,true);stage?.celebrate?.('gratitude',saved.id);
       }
       else gratitudeDetail(saved.id);
-      notify(entry?'感恩已更新。':fishOf(saved).notice);
+      notify(entry?'感恩已更新。':fishOf(saved).notice+outfitReminder('gratitude',previousCredit));
     };
     show(entry?'編輯感恩':'記下感恩',form,'gratitude-form');
     body.focus();
@@ -2227,15 +2261,17 @@ const GraceIsland = (() => {
       form.querySelector('.actions').before(field);
     }
     const outfitField=el('label','企鵝造型','field'),outfitChoice=el('select');
-    const allowedOutfits=entry?[]:unlockedOutfits(state.progress,previewUnlocked());
-    if(allowedOutfits.length){
-      for(const id of ['',...allowedOutfits]){
-        const option=el('option',PENGUIN_OUTFITS[id]);option.value=id;outfitChoice.append(option);
-      }
+    if(!entry){
       outfitField.append(outfitChoice);
       form.querySelector('.actions').before(outfitField);
       const updateOutfitField=()=>{
-        outfitChoice.disabled=cardById.get(animalChoice.value)?.species!=='penguin';
+        const card=cardById.get(animalChoice.value);
+        const available=card?.species==='penguin'?unlockedOutfits(state.progress,previewUnlocked(),card.variant):[];
+        outfitChoice.replaceChildren();
+        for(const id of ['',...available]){
+          const option=el('option',PENGUIN_OUTFITS[id]);option.value=id;outfitChoice.append(option);
+        }
+        outfitChoice.disabled=!available.length;
         outfitField.style.display=outfitChoice.disabled?'none':'';
       };
       animalChoice.onchange=updateOutfitField;
@@ -2248,6 +2284,7 @@ const GraceIsland = (() => {
       event.preventDefault();
       const data = Object.fromEntries(Array.from(new FormData(form),([field,value]) => [field,value.trim()]));
       if (!data.body) return showError(error,Error('請寫下一些靈修心得。'));
+      const previousCredit=outfitCredit(state.progress);
       let saved;
       try {
         await commitRecord('journal',current => {
@@ -2266,7 +2303,7 @@ const GraceIsland = (() => {
           if(speciesFull(animal,current,Boolean(groupIsland)))throw Error(animal.name+'已達個人島的 3 隻上限，請選擇其他動物。');
           const outfit=animal.species==='penguin'?outfitChoice.value:'';
           const personalProgress=groupIsland?state.progress:current.progress;
-          if(outfit&&!unlockedOutfits(personalProgress,previewUnlocked()).includes(outfit))throw Error('這款造型尚未解鎖。');
+          if(outfit&&!unlockedOutfits(personalProgress,previewUnlocked(),animal.variant).includes(outfit))throw Error('這個品種尚未解鎖這款造型。');
           saved = {id,...data,species:animal.species,variant:animal.variant,outfit,bornAt:Date.now()};
           const days=[...new Set([...current.progress.days,today()])];
           return {...current,total,entries:[...current.entries,saved],progress:{...current.progress,days}};
@@ -2275,7 +2312,7 @@ const GraceIsland = (() => {
       panel.close();
       if (!entry){stage?.welcome?.(saved.id);stage?.celebrate?.('journal',saved.id);}
       const unlocked=!previewUnlocked()&&!entry&&islandState().total%3===0 ? unlockOrder[islandState().total/3] : null;
-      notify(entry ? '靈修已更新。' : nameOf(saved)+'來到島上了！'+(unlocked?' 已解鎖'+cardById.get(unlocked).name+'。':''));
+      notify(entry ? '靈修已更新。' : nameOf(saved)+'來到島上了！'+(unlocked?' 已解鎖'+cardById.get(unlocked).name+'。':'')+outfitReminder('journal',previousCredit));
     };
     show(entry ? '編輯靈修' : '寫下今天的靈修',form,entry ? 'edit' : 'new');
     form.elements.body.focus();
@@ -2368,6 +2405,7 @@ const GraceIsland = (() => {
       overview.append(el('small','下一個靈修里程碑：'+next.join('、')));
     }
     list.append(overview);
+    appendOutfitGuide(list);
     const animals=guideSection(list,'靈修動物','每累積 3 篇靈修開放一種動物，開放後可在新增靈修時選擇。');
     unlockOrder.forEach((id,index)=>{
       const card=cardById.get(id);
@@ -2379,7 +2417,6 @@ const GraceIsland = (() => {
     for(const area of TERRAIN_MILESTONES){
       islands.append(progressItem(area.name,area.color,islandState().total,area.at,'篇靈修',()=>formFor(),'已連接主島'));
     }
-    appendOutfitGuide(list);
     const fish=guideSection(list,'感恩之海','感恩獨立計算，每新增一則感恩，可選擇一種已開放的魚。');
     for(const [id,kind] of Object.entries(gratitudeFishKinds)){
       const notes=islandState().gratitude.filter(entry=>(entry.fish||'mackerel')===id);
@@ -2396,12 +2433,14 @@ const GraceIsland = (() => {
     show('圖鑑與解鎖',list,'guide');
   }
   function appendOutfitGuide(list){
-    const outfits=guideSection(list,'我的企鵝造型','連續兩天儲存靈修可得 1 次解鎖機會，之後每多一天再得 1 次。同一天只算一次。每次解鎖一款，所有種類的新企鵝都可選用。');
+    const outfits=guideSection(list,'我的企鵝造型','每天完成一篇靈修和一則感恩，就有 1 次造型解鎖機會。機會可以累積，每次可為指定的企鵝品種解鎖一款造型。');
     const progress=state.progress,credit=outfitCredit(progress);
-    const unlocked=unlockedOutfits(progress,previewUnlocked());
+    const day=today();
+    outfits.append(el('p','今日靈修'+(progress.days.includes(day)?'已完成':'待完成')+' · 今日感恩'+
+      (progress.gratitudeDays.includes(day)?'已完成':'待完成'),'sub'));
     outfits.append(el('strong',previewUnlocked()?'試玩中可直接選擇造型':'可用解鎖次數 '+credit));
-    if(!previewUnlocked()&&credit&&unlocked.length<Object.keys(PENGUIN_OUTFITS).length-1){
-      outfits.append(button('解鎖企鵝造型','primary',unlockOutfit));
+    if(!previewUnlocked()&&credit&&hasOutfitChoices(progress)){
+      outfits.append(button('解鎖造型','primary',unlockOutfit));
     }
     const styles={
       pastor:['牧師領與長袍','#657881'],warrior:['護甲與戰士裝備','#aa895b'],
@@ -2411,34 +2450,44 @@ const GraceIsland = (() => {
       evangelist:['旅行袍與打開的聖經','#688d74']
     };
     for(const [id,[description,color]] of Object.entries(styles)){
-      outfits.append(row(PENGUIN_OUTFITS[id],description,color,unlocked.includes(id)?'新企鵝可選':'未解鎖'));
+      const unlocked=Object.keys(variants).filter(variant=>unlockedOutfits(progress,previewUnlocked(),variant).includes(id));
+      outfits.append(row(PENGUIN_OUTFITS[id],description+(unlocked.length?' · '+unlocked.map(variant=>variants[variant]).join('、'):''),
+        color,unlocked.length?unlocked.length+' 種可選':'未解鎖'));
     }
   }
   function unlockOutfit() {
-    const owned=unlockedOutfits(state.progress);
-    const available=Object.entries(PENGUIN_OUTFITS).filter(([id])=>id&&!owned.includes(id));
+    const available=variant=>Object.entries(PENGUIN_OUTFITS).filter(([id])=>id&&!unlockedOutfits(state.progress,false,variant).includes(id));
+    const eligible=Object.entries(variants).filter(([id])=>available(id).length);
     const form=el('form'),error=el('p',undefined,'error');
     error.setAttribute('role','alert');
-    if(!available.length){
+    if(!eligible.length){
       form.append(el('p','所有企鵝造型已解鎖。','sub'),button('返回圖鑑','soft',guide));
       show('解鎖企鵝造型',form,'outfit');return;
     }
-    const outfitLabel=el('label','選擇一款造型','field'),outfit=el('select');
-    for(const [id,label] of available){
-      const option=el('option',label);option.value=id;outfit.append(option);
+    const variantLabel=el('label','選擇企鵝品種','field'),variantChoice=el('select');
+    for(const [id,label] of eligible){
+      const option=el('option',label);option.value=id;variantChoice.append(option);
     }
+    variantLabel.append(variantChoice);
+    const outfitLabel=el('label','選擇一款造型','field'),outfit=el('select');
+    const updateChoices=()=>outfit.replaceChildren(...available(variantChoice.value).map(([id,label])=>{
+      const option=el('option',label);option.value=id;return option;
+    }));
+    variantChoice.onchange=updateChoices;
+    updateChoices();
     outfitLabel.append(outfit);
     const submit=el('button','解鎖造型','primary');submit.type='submit';
     const actions=el('div',undefined,'actions');actions.append(submit,button('返回圖鑑','soft',guide));
-    form.append(outfitLabel,el('p','解鎖後，新增靈修時可以為新企鵝選用這款造型。','sub'),error,actions);
+    form.append(variantLabel,outfitLabel,el('p','解鎖後，新增這個品種的企鵝時可選用這款造型。','sub'),error,actions);
     form.onsubmit=event=>{
       event.preventDefault();
-      const choice=outfit.value;
+      const choice=outfit.value,variant=variantChoice.value;
       try{
         commit(current=>{
-          if(!choice||!Object.hasOwn(PENGUIN_OUTFITS,choice)||unlockedOutfits(current.progress).includes(choice))throw Error('這個造型無法解鎖，請重新選擇。');
+          if(!Object.hasOwn(variants,variant)||!choice||!Object.hasOwn(PENGUIN_OUTFITS,choice)||
+            unlockedOutfits(current.progress,false,variant).includes(choice))throw Error('這個造型無法解鎖，請重新選擇。');
           if(!outfitCredit(current.progress))throw Error('目前沒有可用的造型解鎖次數。');
-          return {...current,progress:{...current.progress,unlockedOutfits:[...current.progress.unlockedOutfits,choice]}};
+          return {...current,progress:{...current.progress,variantOutfits:[...current.progress.variantOutfits,{variant,outfit:choice}]}};
         });
       }catch(problem){showError(error,problem);return}
       guide();
@@ -3010,6 +3059,14 @@ const GraceIsland = (() => {
     neighbor,
     connect(api) {stage = api;refresh()},
     open:detail,
+    openPrayer(){
+      const actions=el('div',undefined,'actions');
+      actions.append(button('跟拍','primary',()=>{
+        panel.close();
+        if(!stage?.followPrayer())notify('耶穌企鵝已結束禱告。');
+      }));
+      show('碼頭上的耶穌企鵝',actions,'pier-prayer');
+    },
     openGratitude(id){
       if(islandState().anger.some(entry=>entry.id===id&&!entry.released))angerDetail(id);
       else gratitudeDetail(id);
@@ -6473,7 +6530,7 @@ function syncResidents(state){
   dolphinBuoys.forEach(b=>b.visible=state.total>=5||present.has('dolphin'));
   whaleBuoys.forEach(b=>b.visible=state.total>=8||present.has('whale'));
 }
-let following=false,previewUntil=0,journalPreview=false;
+let following=false,previewUntil=0,journalPreview=false,trackingPrayer=false;
 const stopFollowButton=document.getElementById('stop-follow');
 stopFollowButton.onclick=()=>{
   const sidebar=document.getElementById('mobile-sidebar');
@@ -6501,6 +6558,7 @@ function clearAnimalFocus(){
   stopFollowButton.hidden=true;
   trackedFish=null;
   tracking=null;
+  trackingPrayer=false;
   fly=null;
   controls.enabled=true;
   controls.clearMomentum();
@@ -6565,9 +6623,19 @@ function focusResident(id,follow=false,fromJournal=false){
   if(marine)offset.set(Math.sign(target.x||1)*Math.abs(offset.x),offset.y,Math.sign(target.z||1)*Math.abs(offset.z));
   moveCamera(target.clone().add(offset),target,reduce?.2:1.2);
 }
+function focusPrayer(){
+  if(!pierPrayerVisitor?.g.visible)return false;
+  beginAnimalFocus(true,false);
+  trackingPrayer=true;
+  const target=pierPrayerVisitor.g.getWorldPosition(new THREE.Vector3());
+  target.y+=.66;
+  moveCamera(target.clone().add(new THREE.Vector3(3.5,2.15,4.1)),target,reduce?.2:1);
+  return true;
+}
 function followResident(dt){
   const fish=gratitudeFish.get(trackedFish),ray=!fish&&GratitudeRays.has(trackedFish),shark=!fish&&!ray&&AngerSharks.has(trackedFish),resident=residents.get(tracking);
-  if(!fish&&!ray&&!shark&&!resident?.model.g.visible){
+  const prayer=trackingPrayer&&pierPrayerVisitor?.g.visible?pierPrayerVisitor:null;
+  if(!fish&&!ray&&!shark&&!resident?.model.g.visible&&!prayer){
     if(following||journalPreview||previewUntil)returnToIsland();
     return;
   }
@@ -6575,6 +6643,7 @@ function followResident(dt){
   if(fish)positionMackerel(fish,worldTime,target);
   else if(ray)GratitudeRays.pose(trackedFish,worldTime,target);
   else if(shark)AngerSharks.pose(trackedFish,worldTime,target);
+  else if(prayer){prayer.g.getWorldPosition(target);target.y+=.66}
   else{
     resident.model.g.getWorldPosition(target);
     if(!seaKinds.has(resident.entry.species))target.y+=.65;
@@ -6616,6 +6685,7 @@ window.addEventListener('pointerup',event=>{
   pointer.set((event.clientX-bounds.left)/bounds.width*2-1,-(event.clientY-bounds.top)/bounds.height*2+1);
   ray.setFromCamera(pointer,camera);
   const objects=[...residents.values()].filter(item=>item.model.g.visible).map(item=>item.model.g).concat(neighboringIslands.children);
+  if(pierPrayerVisitor?.g.visible)objects.push(pierPrayerVisitor.g);
   if(fishMesh.visible)objects.push(fishMesh,fishTails);
   objects.push(...GratitudeRays.pickables(),...AngerSharks.pickables());
   const hit=ray.intersectObjects(objects,true)
@@ -6627,8 +6697,9 @@ window.addEventListener('pointerup',event=>{
     return;
   }
   let object=hit.object;
-  while(object&&!object.userData.journalId&&!object.userData.neighborId&&!object.userData.waterNoteId)object=object.parent;
+  while(object&&object!==pierPrayerVisitor?.g&&!object.userData.journalId&&!object.userData.neighborId&&!object.userData.waterNoteId)object=object.parent;
   if(!object)return;
+  if(object===pierPrayerVisitor?.g){GraceIsland.openPrayer();return}
   if(object.userData.waterNoteId){
     focusGratitude(object.userData.waterNoteId,false,true);
     GraceIsland.openGratitude(object.userData.waterNoteId);return;
@@ -6930,7 +7001,7 @@ function tick(){
   if(c.y!==renderedCameraHeight)camera.lookAt(controls.target);
   requestAnimationFrame(tick);
 }
-GraceIsland.connect({sync:syncResidents,focus:focusResident,focusGratitude,closePreview,celebrate,reset:resetView,welcome:welcomeResident});
+GraceIsland.connect({sync:syncResidents,focus:focusResident,focusGratitude,followPrayer:focusPrayer,closePreview,celebrate,reset:resetView,welcome:welcomeResident});
 tick();
 } catch (error) {
   console.error(error);
